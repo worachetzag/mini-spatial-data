@@ -74,5 +74,10 @@ func main() {
 	e.PATCH("/api/places/:id", placeHandler.UpdateByID)
 	e.DELETE("/api/places/:id", placeHandler.DeleteByID)
 
-	e.Logger.Fatal(e.Start(":8080"))
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080"
+	}
+
+	e.Logger.Fatal(e.Start(":" + port))
 }
