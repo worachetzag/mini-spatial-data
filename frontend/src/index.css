@@ -90,6 +90,12 @@ body {
   background: #fff;
 }
 
+.map-help {
+  color: #475569;
+  font-size: 13px;
+  margin: 0 0 10px;
+}
+
 table {
   width: 100%;
   border-collapse: collapse;
@@ -147,6 +153,10 @@ thead th {
   background: #0ea5e9;
   box-shadow: 0 0 0 1px rgba(2, 6, 23, 0.2);
   cursor: pointer;
+}
+
+.map-marker-draft {
+  background: #f59e0b;
 }
 
 .actions {

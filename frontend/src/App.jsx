@@ -2,19 +2,18 @@ import React, { useEffect, useMemo, useState } from "react";
 import maplibregl from "maplibre-gl";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
-const MAP_STYLE_URL = import.meta.env.VITE_MAP_STYLE_URL;
-const DEFAULT_MAP_STYLE = "https://demotiles.maplibre.org/style.json";
+const DEFAULT_MAP_STYLE =
+  "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json";
 
 const MAP_STYLE_OPTIONS = [
-  { id: "demo", label: "MapLibre Demo", url: DEFAULT_MAP_STYLE },
   {
-    id: "carto-light",
-    label: "Carto Positron (Light)",
-    url: "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json"
+    id: "light",
+    label: "White",
+    url: DEFAULT_MAP_STYLE
   },
   {
-    id: "carto-dark",
-    label: "Carto Dark",
+    id: "dark",
+    label: "Dark",
     url: "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json"
   }
 ];
@@ -32,24 +31,42 @@ function extractPointCoordinates(list) {
     .map((coords) => [Number(coords[0]), Number(coords[1])]);
 }
 
+function distanceMeters(lat1, lng1, lat2, lng2) {
+  const toRad = (value) => (value * Math.PI) / 180;
+  const earthRadius = 6371000;
+  const dLat = toRad(lat2 - lat1);
+  const dLng = toRad(lng2 - lng1);
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(toRad(lat1)) *
+      Math.cos(toRad(lat2)) *
+      Math.sin(dLng / 2) *
+      Math.sin(dLng / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return earthRadius * c;
+}
+
 function App() {
   const [places, setPlaces] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [viewMode, setViewMode] = useState("table");
-  const [mapStyleUrl, setMapStyleUrl] = useState(
-    MAP_STYLE_URL || DEFAULT_MAP_STYLE
-  );
+  const [selectedPlaceId, setSelectedPlaceId] = useState("");
+  const [mapStyleUrl, setMapStyleUrl] = useState(DEFAULT_MAP_STYLE);
   const [form, setForm] = useState({
     name: "",
     lng: "",
     lat: ""
   });
   const [editingId, setEditingId] = useState("");
+  const [pickedPointLabel, setPickedPointLabel] = useState("");
   const mapContainerRef = React.useRef(null);
   const mapRef = React.useRef(null);
   const markersRef = React.useRef([]);
+  const markerByIdRef = React.useRef({});
+  const draftMarkerRef = React.useRef(null);
+  const clickPopupRef = React.useRef(null);
 
   const apiUrl = useMemo(
     () => (API_BASE_URL ? `${API_BASE_URL}/api/places` : ""),
@@ -117,6 +134,15 @@ function App() {
       }
       setForm({ name: "", lng: "", lat: "" });
       setEditingId("");
+      setPickedPointLabel("");
+      if (draftMarkerRef.current) {
+        draftMarkerRef.current.remove();
+        draftMarkerRef.current = null;
+      }
+      if (clickPopupRef.current) {
+        clickPopupRef.current.remove();
+        clickPopupRef.current = null;
+      }
       await loadPlaces();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unknown error");
@@ -137,6 +163,15 @@ function App() {
   function cancelEdit() {
     setEditingId("");
     setForm({ name: "", lng: "", lat: "" });
+    setPickedPointLabel("");
+    if (draftMarkerRef.current) {
+      draftMarkerRef.current.remove();
+      draftMarkerRef.current = null;
+    }
+    if (clickPopupRef.current) {
+      clickPopupRef.current.remove();
+      clickPopupRef.current = null;
+    }
   }
 
   async function deletePlace(placeId) {
@@ -164,6 +199,12 @@ function App() {
     }
   }
 
+  function showOnMap(place) {
+    if (!place?.id) return;
+    setSelectedPlaceId(place.id);
+    setViewMode("map");
+  }
+
   useEffect(() => {
     loadPlaces();
   }, [apiUrl]);
@@ -186,9 +227,78 @@ function App() {
 
     mapRef.current.addControl(new maplibregl.NavigationControl(), "top-right");
 
+    const handleMapClick = (event) => {
+      const lng = Number(event.lngLat.lng.toFixed(6));
+      const lat = Number(event.lngLat.lat.toFixed(6));
+
+      let nearest = null;
+      places.forEach((place) => {
+        const coords = place?.geometry?.coordinates;
+        if (!Array.isArray(coords) || coords.length < 2) return;
+        const pLng = Number(coords[0]);
+        const pLat = Number(coords[1]);
+        if (Number.isNaN(pLng) || Number.isNaN(pLat)) return;
+        const meters = distanceMeters(lat, lng, pLat, pLng);
+        if (!nearest || meters < nearest.meters) {
+          nearest = {
+            name: place?.properties?.name || "Unnamed place",
+            meters
+          };
+        }
+      });
+
+      const isExactExistingPoint = nearest && nearest.meters <= 8;
+      if (clickPopupRef.current) {
+        clickPopupRef.current.remove();
+      }
+
+      if (isExactExistingPoint) {
+        setPickedPointLabel("");
+        if (draftMarkerRef.current) {
+          draftMarkerRef.current.remove();
+          draftMarkerRef.current = null;
+        }
+        return;
+      }
+
+      setForm((prev) => ({
+        ...prev,
+        lng: String(lng),
+        lat: String(lat)
+      }));
+      setPickedPointLabel(`${lng}, ${lat}`);
+
+      if (draftMarkerRef.current) {
+        draftMarkerRef.current.remove();
+      }
+      const draftEl = document.createElement("div");
+      draftEl.className = "map-marker map-marker-draft";
+      draftMarkerRef.current = new maplibregl.Marker({ element: draftEl })
+        .setLngLat([lng, lat])
+        .addTo(mapRef.current);
+
+      clickPopupRef.current = new maplibregl.Popup({ offset: 20 })
+        .setLngLat([lng, lat])
+        .setHTML(`<div><strong>Picked point</strong><br/>lat: ${lat}<br/>lon: ${lng}</div>`)
+        .addTo(mapRef.current);
+    };
+
+    mapRef.current.on("click", handleMapClick);
+
     return () => {
+      if (mapRef.current) {
+        mapRef.current.off("click", handleMapClick);
+      }
       markersRef.current.forEach((marker) => marker.remove());
       markersRef.current = [];
+      if (draftMarkerRef.current) {
+        draftMarkerRef.current.remove();
+        draftMarkerRef.current = null;
+      }
+      if (clickPopupRef.current) {
+        clickPopupRef.current.remove();
+        clickPopupRef.current = null;
+      }
       if (mapRef.current) {
         mapRef.current.remove();
         mapRef.current = null;
@@ -207,6 +317,7 @@ function App() {
 
     markersRef.current.forEach((marker) => marker.remove());
     markersRef.current = [];
+    markerByIdRef.current = {};
 
     const bounds = new maplibregl.LngLatBounds();
     let pointCount = 0;
@@ -226,10 +337,15 @@ function App() {
 
       const marker = new maplibregl.Marker({ element: markerEl })
         .setLngLat([lng, lat])
-        .setPopup(new maplibregl.Popup({ offset: 24 }).setText(name))
+        .setPopup(
+          new maplibregl.Popup({ offset: 24 }).setHTML(
+            `<div><strong>${name}</strong><br/>lat: ${lat}<br/>lon: ${lng}</div>`
+          )
+        )
         .addTo(mapRef.current);
 
       markersRef.current.push(marker);
+      markerByIdRef.current[place.id] = marker;
       bounds.extend([lng, lat]);
       pointCount += 1;
     });
@@ -241,6 +357,26 @@ function App() {
       mapRef.current.flyTo({ center, zoom: 12 });
     }
   }, [mapStyleUrl, places, viewMode]);
+
+  useEffect(() => {
+    if (viewMode !== "map") return;
+    if (!selectedPlaceId) return;
+    if (!mapRef.current) return;
+
+    const target = places.find((place) => place.id === selectedPlaceId);
+    const coords = target?.geometry?.coordinates;
+    if (!target || !Array.isArray(coords) || coords.length < 2) return;
+
+    const lng = Number(coords[0]);
+    const lat = Number(coords[1]);
+    if (Number.isNaN(lng) || Number.isNaN(lat)) return;
+
+    mapRef.current.flyTo({ center: [lng, lat], zoom: 13 });
+    const marker = markerByIdRef.current[selectedPlaceId];
+    if (marker) {
+      marker.togglePopup();
+    }
+  }, [places, selectedPlaceId, viewMode]);
 
   return (
     <main className="page">
@@ -303,8 +439,12 @@ function App() {
             </button>
           )}
         </form>
+        <p className="map-help">
+          Tip: click on the map to auto-fill coordinates.
+          {pickedPointLabel && ` Picked: ${pickedPointLabel}.`}
+        </p>
 
-        {!loading && !error && viewMode === "table" && (
+        {viewMode === "table" && (
           <table>
             <thead>
               <tr>
@@ -328,6 +468,13 @@ function App() {
                   <td className="actions">
                     <button
                       type="button"
+                      onClick={() => showOnMap(place)}
+                      disabled={submitting}
+                    >
+                      Show on map
+                    </button>
+                    <button
+                      type="button"
                       onClick={() => startEdit(place)}
                       disabled={submitting}
                     >
@@ -347,7 +494,7 @@ function App() {
           </table>
         )}
 
-        {!loading && !error && viewMode === "map" && (
+        {viewMode === "map" && (
           <>
             <div className="map-meta">
               <span>Interactive map view</span>
@@ -364,10 +511,6 @@ function App() {
                     {opt.label}
                   </option>
                 ))}
-                {MAP_STYLE_URL &&
-                  !MAP_STYLE_OPTIONS.some((opt) => opt.url === MAP_STYLE_URL) && (
-                    <option value={MAP_STYLE_URL}>Configured (.env)</option>
-                  )}
               </select>
             </label>
             <div ref={mapContainerRef} className="map-container" />
