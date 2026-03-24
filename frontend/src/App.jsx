@@ -541,7 +541,8 @@ function App() {
         </p>
 
         {viewMode === "table" && (
-          <table>
+          <div className="table-wrap">
+            <table>
             <thead>
               <tr>
                 <th>Name</th>
@@ -592,7 +593,8 @@ function App() {
                 </tr>
               ))}
             </tbody>
-          </table>
+            </table>
+          </div>
         )}
 
         {viewMode === "map" && (

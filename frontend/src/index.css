@@ -117,6 +117,8 @@ body {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
   margin-bottom: 12px;
 }
 
@@ -177,6 +179,15 @@ body {
 table {
   width: 100%;
   border-collapse: collapse;
+}
+
+.table-wrap {
+  width: 100%;
+  overflow-x: auto;
+}
+
+.table-wrap table {
+  min-width: 680px;
 }
 
 th,
@@ -240,6 +251,7 @@ thead th {
 .actions {
   display: flex;
   gap: 8px;
+  flex-wrap: wrap;
 }
 
 .actions button {
@@ -248,4 +260,66 @@ thead th {
   padding: 6px 10px;
   background: #fff;
   cursor: pointer;
+}
+
+@media (max-width: 900px) {
+  .place-form {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .place-form input[type="text"] {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 640px) {
+  .page {
+    padding: 14px;
+  }
+
+  .panel {
+    padding: 12px;
+  }
+
+  .header h1 {
+    font-size: 32px;
+    line-height: 1.15;
+  }
+
+  .toast-container {
+    left: 12px;
+    right: 12px;
+    top: 12px;
+  }
+
+  .toast {
+    min-width: 0;
+    max-width: none;
+  }
+
+  .place-form {
+    grid-template-columns: 1fr;
+  }
+
+  .place-form button {
+    width: 100%;
+  }
+
+  .view-switch {
+    width: 100%;
+  }
+
+  .view-switch button {
+    flex: 1;
+  }
+
+  .map-meta,
+  .map-style-row {
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .map-container {
+    min-height: 300px;
+  }
 }

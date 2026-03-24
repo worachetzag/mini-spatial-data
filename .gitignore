@@ -22,6 +22,7 @@ yarn-error.log*
 # backend build outputs
 backend/bin/
 backend/tmp/
+backend/app
 backend/*.exe
 backend/*.out
 backend/*.test
