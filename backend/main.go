@@ -7,6 +7,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/home/mini-spatial-data/backend/internal/places"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -18,6 +19,13 @@ func mongoURI() string {
 		return u
 	}
 	return "mongodb://localhost:27017"
+}
+
+func mongoDBName() string {
+	if n := os.Getenv("MONGODB_DB"); n != "" {
+		return n
+	}
+	return "spatial_data"
 }
 
 func main() {
@@ -43,12 +51,20 @@ func main() {
 	e.Use(middleware.Logger())
 	e.Use(middleware.Recover())
 
+	placeRepo := places.NewRepository(client.Database(mongoDBName()))
+	placeHandler := places.NewHandler(placeRepo)
+
 	e.GET("/health", func(c echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]string{
 			"status": "ok",
 			"mongo":  "up",
 		})
 	})
+	e.GET("/api/places", placeHandler.List)
+	e.GET("/api/places/:id", placeHandler.GetByID)
+	e.POST("/api/places", placeHandler.Create)
+	e.PATCH("/api/places/:id", placeHandler.UpdateByID)
+	e.DELETE("/api/places/:id", placeHandler.DeleteByID)
 
 	e.Logger.Fatal(e.Start(":8080"))
 }
