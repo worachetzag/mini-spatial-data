@@ -46,6 +46,10 @@ function distanceMeters(lat1, lng1, lat2, lng2) {
   return earthRadius * c;
 }
 
+function toastId() {
+  return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
 function App() {
   const [places, setPlaces] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -61,6 +65,8 @@ function App() {
   });
   const [editingId, setEditingId] = useState("");
   const [pickedPointLabel, setPickedPointLabel] = useState("");
+  const [toasts, setToasts] = useState([]);
+  const [deleteTarget, setDeleteTarget] = useState(null);
   const mapContainerRef = React.useRef(null);
   const mapRef = React.useRef(null);
   const markersRef = React.useRef([]);
@@ -72,6 +78,14 @@ function App() {
     () => (API_BASE_URL ? `${API_BASE_URL}/api/places` : ""),
     []
   );
+
+  function showToast(message, kind = "info") {
+    const id = toastId();
+    setToasts((prev) => [...prev, { id, message, kind }]);
+    window.setTimeout(() => {
+      setToasts((prev) => prev.filter((toast) => toast.id !== id));
+    }, 2500);
+  }
 
   async function loadPlaces() {
     setLoading(true);
@@ -99,12 +113,14 @@ function App() {
     event.preventDefault();
     if (!apiUrl) {
       setError("Missing VITE_API_BASE_URL");
+      showToast("Missing VITE_API_BASE_URL", "error");
       return;
     }
     const lng = Number(form.lng);
     const lat = Number(form.lat);
     if (!form.name.trim() || Number.isNaN(lng) || Number.isNaN(lat)) {
       setError("Please provide name, longitude, and latitude");
+      showToast("Please provide name, longitude, and latitude", "error");
       return;
     }
 
@@ -143,9 +159,12 @@ function App() {
         clickPopupRef.current.remove();
         clickPopupRef.current = null;
       }
+      showToast(editingId ? "Place updated" : "Place created", "success");
       await loadPlaces();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Unknown error");
+      const msg = err instanceof Error ? err.message : "Unknown error";
+      setError(msg);
+      showToast(msg, "error");
     } finally {
       setSubmitting(false);
     }
@@ -177,10 +196,9 @@ function App() {
   async function deletePlace(placeId) {
     if (!apiUrl) {
       setError("Missing VITE_API_BASE_URL");
+      showToast("Missing VITE_API_BASE_URL", "error");
       return;
     }
-    const ok = window.confirm("Delete this place?");
-    if (!ok) return;
     setSubmitting(true);
     setError("");
     try {
@@ -191,18 +209,48 @@ function App() {
       if (editingId === placeId) {
         cancelEdit();
       }
+      showToast("Place deleted", "success");
       await loadPlaces();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Unknown error");
+      const msg = err instanceof Error ? err.message : "Unknown error";
+      setError(msg);
+      showToast(msg, "error");
     } finally {
       setSubmitting(false);
     }
+  }
+
+  async function confirmDelete() {
+    if (!deleteTarget) return;
+    await deletePlace(deleteTarget.id);
+    setDeleteTarget(null);
+  }
+
+  function cancelDelete() {
+    setDeleteTarget(null);
+    showToast("Delete cancelled", "info");
   }
 
   function showOnMap(place) {
     if (!place?.id) return;
     setSelectedPlaceId(place.id);
     setViewMode("map");
+    showToast(`Showing ${place?.properties?.name || "place"} on map`, "info");
+  }
+
+  function changeViewMode(mode) {
+    setViewMode(mode);
+    setSelectedPlaceId("");
+    setPickedPointLabel("");
+    if (draftMarkerRef.current) {
+      draftMarkerRef.current.remove();
+      draftMarkerRef.current = null;
+    }
+    if (clickPopupRef.current) {
+      clickPopupRef.current.remove();
+      clickPopupRef.current = null;
+    }
+    showToast(`Switched to ${mode} view`, "info");
   }
 
   useEffect(() => {
@@ -258,6 +306,7 @@ function App() {
           draftMarkerRef.current.remove();
           draftMarkerRef.current = null;
         }
+        showToast("Clicked existing place", "info");
         return;
       }
 
@@ -281,6 +330,7 @@ function App() {
         .setLngLat([lng, lat])
         .setHTML(`<div><strong>Picked point</strong><br/>lat: ${lat}<br/>lon: ${lng}</div>`)
         .addTo(mapRef.current);
+      showToast("Picked coordinates from map", "info");
     };
 
     mapRef.current.on("click", handleMapClick);
@@ -309,7 +359,21 @@ function App() {
   useEffect(() => {
     if (!mapRef.current) return;
     if (!mapStyleUrl) return;
-    mapRef.current.setStyle(mapStyleUrl);
+    const map = mapRef.current;
+    const currentCenter = map.getCenter();
+    const currentZoom = map.getZoom();
+    const currentBearing = map.getBearing();
+    const currentPitch = map.getPitch();
+
+    map.setStyle(mapStyleUrl);
+    map.once("style.load", () => {
+      map.jumpTo({
+        center: currentCenter,
+        zoom: currentZoom,
+        bearing: currentBearing,
+        pitch: currentPitch
+      });
+    });
   }, [mapStyleUrl]);
 
   useEffect(() => {
@@ -356,7 +420,7 @@ function App() {
       const center = bounds.getCenter();
       mapRef.current.flyTo({ center, zoom: 12 });
     }
-  }, [mapStyleUrl, places, viewMode]);
+  }, [places, viewMode]);
 
   useEffect(() => {
     if (viewMode !== "map") return;
@@ -380,12 +444,44 @@ function App() {
 
   return (
     <main className="page">
+      <div className="toast-container">
+        {toasts.map((toast) => (
+          <div key={toast.id} className={`toast ${toast.kind}`}>
+            {toast.message}
+          </div>
+        ))}
+      </div>
       <header className="header">
         <h1>Mini Spatial Data</h1>
         <p>Places list from backend API</p>
       </header>
 
       <section className="panel">
+        {deleteTarget && (
+          <div className="modal-backdrop" role="dialog" aria-modal="true">
+            <div className="modal-card">
+              <h3>Delete place?</h3>
+              <p>
+                Are you sure you want to delete{" "}
+                <strong>{deleteTarget.name || "this place"}</strong>?
+              </p>
+              <div className="modal-actions">
+                <button type="button" onClick={cancelDelete} disabled={submitting}>
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="danger"
+                  onClick={confirmDelete}
+                  disabled={submitting}
+                >
+                  Delete
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         <div className="panel-title">
           <h2>Places</h2>
           <span className="count">{places.length} records</span>
@@ -394,14 +490,14 @@ function App() {
           <button
             type="button"
             className={viewMode === "table" ? "active" : ""}
-            onClick={() => setViewMode("table")}
+            onClick={() => changeViewMode("table")}
           >
             Table
           </button>
           <button
             type="button"
             className={viewMode === "map" ? "active" : ""}
-            onClick={() => setViewMode("map")}
+            onClick={() => changeViewMode("map")}
           >
             Map
           </button>
@@ -482,7 +578,12 @@ function App() {
                     </button>
                     <button
                       type="button"
-                      onClick={() => deletePlace(place.id)}
+                      onClick={() =>
+                        setDeleteTarget({
+                          id: place.id,
+                          name: place?.properties?.name || ""
+                        })
+                      }
                       disabled={submitting}
                     >
                       Delete
