@@ -115,7 +115,7 @@
         ],
         "body": {
           "mode": "raw",
-          "raw": "{\n  \"properties\": {\n    \"name\": \"มหาวิทยาลัยขอนแก่น (อัปเดต)\",\n    \"category\": \"university\"\n  }\n}"
+          "raw": "{\n  \"properties\": {\n    \"name\": \"มหาวิทยาลัยขอนแก่น (อัปเดต)\"\n  }\n}"
         },
         "url": {
           "raw": "{{baseUrl}}/api/places/{{placeId}}",

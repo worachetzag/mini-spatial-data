@@ -51,6 +51,45 @@ body {
   color: #b91c1c;
 }
 
+.view-switch {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.view-switch button {
+  border: 1px solid #cbd5e1;
+  background: #fff;
+  color: #0f172a;
+  border-radius: 8px;
+  padding: 6px 12px;
+  cursor: pointer;
+}
+
+.view-switch button.active {
+  border-color: #0ea5e9;
+  background: #e0f2fe;
+}
+
+.place-form {
+  display: grid;
+  grid-template-columns: 2fr 1fr 1fr auto auto;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.place-form input,
+.place-form button {
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+
+.place-form button {
+  cursor: pointer;
+  background: #fff;
+}
+
 table {
   width: 100%;
   border-collapse: collapse;
@@ -65,4 +104,25 @@ td {
 
 thead th {
   background: #f8fafc;
+}
+
+.map-container {
+  width: 100%;
+  min-height: 460px;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid #e2e8f0;
+}
+
+.actions {
+  display: flex;
+  gap: 8px;
+}
+
+.actions button {
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  padding: 6px 10px;
+  background: #fff;
+  cursor: pointer;
 }
