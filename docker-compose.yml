@@ -1,0 +1,14 @@
+services:
+  mongodb:
+    image: mongo:7
+    container_name: mini-spatial-mongodb
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    environment:
+      MONGO_INITDB_DATABASE: spatial_data
+    volumes:
+      - mongodb_data:/data/db
+
+volumes:
+  mongodb_data:
