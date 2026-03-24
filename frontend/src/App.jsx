@@ -3,6 +3,21 @@ import maplibregl from "maplibre-gl";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
 const MAP_STYLE_URL = import.meta.env.VITE_MAP_STYLE_URL;
+const DEFAULT_MAP_STYLE = "https://demotiles.maplibre.org/style.json";
+
+const MAP_STYLE_OPTIONS = [
+  { id: "demo", label: "MapLibre Demo", url: DEFAULT_MAP_STYLE },
+  {
+    id: "carto-light",
+    label: "Carto Positron (Light)",
+    url: "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json"
+  },
+  {
+    id: "carto-dark",
+    label: "Carto Dark",
+    url: "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json"
+  }
+];
 
 function extractPointCoordinates(list) {
   return list
@@ -23,6 +38,9 @@ function App() {
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [viewMode, setViewMode] = useState("table");
+  const [mapStyleUrl, setMapStyleUrl] = useState(
+    MAP_STYLE_URL || DEFAULT_MAP_STYLE
+  );
   const [form, setForm] = useState({
     name: "",
     lng: "",
@@ -44,11 +62,6 @@ function App() {
     if (!apiUrl) {
       setLoading(false);
       setError("Missing VITE_API_BASE_URL");
-      return;
-    }
-    if (!MAP_STYLE_URL) {
-      setLoading(false);
-      setError("Missing VITE_MAP_STYLE_URL");
       return;
     }
     try {
@@ -166,7 +179,7 @@ function App() {
 
     mapRef.current = new maplibregl.Map({
       container: mapContainerRef.current,
-      style: MAP_STYLE_URL,
+      style: mapStyleUrl,
       center: initialCenter,
       zoom: initialZoom
     });
@@ -181,7 +194,13 @@ function App() {
         mapRef.current = null;
       }
     };
-  }, [places, viewMode]);
+  }, [viewMode]);
+
+  useEffect(() => {
+    if (!mapRef.current) return;
+    if (!mapStyleUrl) return;
+    mapRef.current.setStyle(mapStyleUrl);
+  }, [mapStyleUrl]);
 
   useEffect(() => {
     if (!mapRef.current) return;
@@ -200,7 +219,12 @@ function App() {
       const lat = Number(coords[1]);
       if (Number.isNaN(lng) || Number.isNaN(lat)) return;
 
-      const marker = new maplibregl.Marker()
+      const markerEl = document.createElement("button");
+      markerEl.type = "button";
+      markerEl.className = "map-marker";
+      markerEl.setAttribute("aria-label", name);
+
+      const marker = new maplibregl.Marker({ element: markerEl })
         .setLngLat([lng, lat])
         .setPopup(new maplibregl.Popup({ offset: 24 }).setText(name))
         .addTo(mapRef.current);
@@ -216,7 +240,7 @@ function App() {
       const center = bounds.getCenter();
       mapRef.current.flyTo({ center, zoom: 12 });
     }
-  }, [places, viewMode]);
+  }, [mapStyleUrl, places, viewMode]);
 
   return (
     <main className="page">
@@ -324,7 +348,30 @@ function App() {
         )}
 
         {!loading && !error && viewMode === "map" && (
-          <div ref={mapContainerRef} className="map-container" />
+          <>
+            <div className="map-meta">
+              <span>Interactive map view</span>
+              <span>{places.length} point(s)</span>
+            </div>
+            <label className="map-style-row">
+              <span>Map style:</span>
+              <select
+                value={mapStyleUrl}
+                onChange={(e) => setMapStyleUrl(e.target.value)}
+              >
+                {MAP_STYLE_OPTIONS.map((opt) => (
+                  <option key={opt.id} value={opt.url}>
+                    {opt.label}
+                  </option>
+                ))}
+                {MAP_STYLE_URL &&
+                  !MAP_STYLE_OPTIONS.some((opt) => opt.url === MAP_STYLE_URL) && (
+                    <option value={MAP_STYLE_URL}>Configured (.env)</option>
+                  )}
+              </select>
+            </label>
+            <div ref={mapContainerRef} className="map-container" />
+          </>
         )}
       </section>
     </main>

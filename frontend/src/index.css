@@ -114,6 +114,41 @@ thead th {
   border: 1px solid #e2e8f0;
 }
 
+.map-meta {
+  display: flex;
+  justify-content: space-between;
+  color: #475569;
+  font-size: 14px;
+  margin-bottom: 8px;
+}
+
+.map-style-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 8px;
+  color: #334155;
+  font-size: 14px;
+}
+
+.map-style-row select {
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  padding: 6px 8px;
+  background: #fff;
+  color: #0f172a;
+}
+
+.map-marker {
+  width: 16px;
+  height: 16px;
+  border: 2px solid #fff;
+  border-radius: 999px;
+  background: #0ea5e9;
+  box-shadow: 0 0 0 1px rgba(2, 6, 23, 0.2);
+  cursor: pointer;
+}
+
 .actions {
   display: flex;
   gap: 8px;
