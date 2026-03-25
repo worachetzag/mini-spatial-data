@@ -46,6 +46,42 @@ func (r *Repository) List(ctx context.Context, page int64, limit int64) ([]Place
 	return places, total, nil
 }
 
+func (r *Repository) ListAll(ctx context.Context) ([]Place, error) {
+	findOptions := options.Find().
+		SetSort(bson.D{{Key: "_id", Value: -1}})
+
+	cur, err := r.collection.Find(ctx, bson.D{}, findOptions)
+	if err != nil {
+		return nil, err
+	}
+	defer cur.Close(ctx)
+
+	places := make([]Place, 0)
+	if err := cur.All(ctx, &places); err != nil {
+		return nil, err
+	}
+
+	return places, nil
+}
+
+func (r *Repository) ListByIDs(ctx context.Context, ids []primitive.ObjectID) ([]Place, error) {
+	findOptions := options.Find().
+		SetSort(bson.D{{Key: "_id", Value: -1}})
+
+	cur, err := r.collection.Find(ctx, bson.M{"_id": bson.M{"$in": ids}}, findOptions)
+	if err != nil {
+		return nil, err
+	}
+	defer cur.Close(ctx)
+
+	places := make([]Place, 0)
+	if err := cur.All(ctx, &places); err != nil {
+		return nil, err
+	}
+
+	return places, nil
+}
+
 func (r *Repository) Create(ctx context.Context, place *Place) (primitive.ObjectID, error) {
 	res, err := r.collection.InsertOne(ctx, place)
 	if err != nil {
@@ -58,6 +94,25 @@ func (r *Repository) Create(ctx context.Context, place *Place) (primitive.Object
 	}
 
 	return id, nil
+}
+
+func (r *Repository) CreateMany(ctx context.Context, places []Place) (int64, error) {
+	if len(places) == 0 {
+		return 0, nil
+	}
+
+	docs := make([]any, 0, len(places))
+	for i := range places {
+		places[i].ID = primitive.NilObjectID
+		docs = append(docs, places[i])
+	}
+
+	res, err := r.collection.InsertMany(ctx, docs)
+	if err != nil {
+		return 0, err
+	}
+
+	return int64(len(res.InsertedIDs)), nil
 }
 
 func (r *Repository) GetByID(ctx context.Context, id primitive.ObjectID) (*Place, error) {
@@ -76,6 +131,14 @@ func (r *Repository) DeleteByID(ctx context.Context, id primitive.ObjectID) (boo
 	}
 
 	return res.DeletedCount > 0, nil
+}
+
+func (r *Repository) DeleteManyByIDs(ctx context.Context, ids []primitive.ObjectID) (int64, error) {
+	res, err := r.collection.DeleteMany(ctx, bson.M{"_id": bson.M{"$in": ids}})
+	if err != nil {
+		return 0, err
+	}
+	return res.DeletedCount, nil
 }
 
 func (r *Repository) UpdateByID(ctx context.Context, id primitive.ObjectID, setFields bson.M) (bool, error) {

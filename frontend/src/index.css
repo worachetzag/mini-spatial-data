@@ -176,6 +176,40 @@ body {
   margin: 0 0 10px;
 }
 
+.data-tools {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+
+.export-tools,
+.import-tools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.data-tools button,
+.data-tools input[type="file"] {
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: #fff;
+}
+
+.table-wrap input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+}
+
+.data-tools button {
+  cursor: pointer;
+}
+
 table {
   width: 100%;
   border-collapse: collapse;
@@ -195,6 +229,7 @@ td {
   text-align: left;
   border-bottom: 1px solid #e2e8f0;
   padding: 10px 8px;
+  vertical-align: middle;
 }
 
 thead th {
@@ -320,6 +355,21 @@ thead th {
 
   .place-form {
     grid-template-columns: 1fr;
+  }
+
+  .data-tools {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .export-tools,
+  .import-tools {
+    width: 100%;
+  }
+
+  .data-tools button,
+  .data-tools input[type="file"] {
+    width: 100%;
   }
 
   .place-form button {

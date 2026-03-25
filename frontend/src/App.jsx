@@ -71,6 +71,9 @@ function App() {
   const [pickedPointLabel, setPickedPointLabel] = useState("");
   const [toasts, setToasts] = useState([]);
   const [deleteTarget, setDeleteTarget] = useState(null);
+  const [selectedIds, setSelectedIds] = useState([]);
+  const [importFile, setImportFile] = useState(null);
+  const [importing, setImporting] = useState(false);
   const mapContainerRef = React.useRef(null);
   const mapRef = React.useRef(null);
   const markersRef = React.useRef([]);
@@ -80,6 +83,18 @@ function App() {
 
   const apiUrl = useMemo(
     () => (API_BASE_URL ? `${API_BASE_URL}/api/places` : ""),
+    []
+  );
+  const exportUrl = useMemo(
+    () => (API_BASE_URL ? `${API_BASE_URL}/api/places/export` : ""),
+    []
+  );
+  const importUrl = useMemo(
+    () => (API_BASE_URL ? `${API_BASE_URL}/api/places/import` : ""),
+    []
+  );
+  const bulkDeleteUrl = useMemo(
+    () => (API_BASE_URL ? `${API_BASE_URL}/api/places/bulk-delete` : ""),
     []
   );
 
@@ -129,6 +144,148 @@ function App() {
       setError(err instanceof Error ? err.message : "Unknown error");
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function handleExport(format) {
+    if (!exportUrl) {
+      setError("Missing VITE_API_BASE_URL");
+      showToast("Missing VITE_API_BASE_URL", "error");
+      return;
+    }
+    try {
+      const params = new URLSearchParams({ format });
+      if (selectedIds.length > 0) {
+        params.set("ids", selectedIds.join(","));
+      }
+      const response = await fetch(`${exportUrl}?${params.toString()}`);
+      if (!response.ok) {
+        throw new Error(`Export failed: ${response.status}`);
+      }
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `places.${format}`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      window.URL.revokeObjectURL(url);
+      const target = selectedIds.length > 0 ? "selected records" : "all records";
+      showToast(`Exported ${format.toUpperCase()} (${target})`, "success");
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Unknown error";
+      setError(msg);
+      showToast(msg, "error");
+    }
+  }
+
+  async function deleteSelected() {
+    if (!bulkDeleteUrl) {
+      setError("Missing VITE_API_BASE_URL");
+      showToast("Missing VITE_API_BASE_URL", "error");
+      return;
+    }
+    if (selectedIds.length === 0) {
+      showToast("Please select at least one record", "info");
+      return;
+    }
+
+    setSubmitting(true);
+    setError("");
+    try {
+      const response = await fetch(bulkDeleteUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids: selectedIds })
+      });
+      if (!response.ok) {
+        throw new Error(`Delete selected failed: ${response.status}`);
+      }
+      const payload = await response.json();
+      const deleted = Number(payload.deleted || 0);
+      showToast(`Deleted ${deleted} selected record(s)`, "success");
+      setSelectedIds([]);
+      await loadPlaces(currentPage);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Unknown error";
+      setError(msg);
+      showToast(msg, "error");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  function toggleSelect(id, checked) {
+    setSelectedIds((prev) => {
+      if (checked) {
+        if (prev.includes(id)) return prev;
+        return [...prev, id];
+      }
+      return prev.filter((v) => v !== id);
+    });
+  }
+
+  function toggleSelectCurrentPage(checked) {
+    const pageIds = places.map((place) => place.id).filter(Boolean);
+    setSelectedIds((prev) => {
+      const set = new Set(prev);
+      if (checked) {
+        pageIds.forEach((id) => set.add(id));
+      } else {
+        pageIds.forEach((id) => set.delete(id));
+      }
+      return Array.from(set);
+    });
+  }
+
+  const currentPageIds = places.map((place) => place.id).filter(Boolean);
+  const allCurrentPageSelected =
+    currentPageIds.length > 0 && currentPageIds.every((id) => selectedIds.includes(id));
+
+  async function handleImport() {
+    if (!importUrl) {
+      setError("Missing VITE_API_BASE_URL");
+      showToast("Missing VITE_API_BASE_URL", "error");
+      return;
+    }
+    if (!importFile) {
+      showToast("Please choose CSV or XLSX file", "error");
+      return;
+    }
+
+    const lower = importFile.name.toLowerCase();
+    const format = lower.endsWith(".xlsx") ? "xlsx" : "csv";
+
+    const formData = new FormData();
+    formData.append("file", importFile);
+
+    setImporting(true);
+    setError("");
+    try {
+      const response = await fetch(`${importUrl}?format=${format}`, {
+        method: "POST",
+        body: formData
+      });
+      if (!response.ok) {
+        const contentType = response.headers.get("content-type") || "";
+        if (contentType.includes("application/json")) {
+          const payload = await response.json();
+          throw new Error(payload.error || `Import failed: ${response.status}`);
+        }
+        throw new Error(`Import failed: ${response.status}`);
+      }
+      const payload = await response.json();
+      const inserted = Number(payload.inserted || 0);
+      showToast(`Imported ${inserted} records`, "success");
+      setImportFile(null);
+      await loadPlaces(1);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Unknown error";
+      setError(msg);
+      showToast(msg, "error");
+    } finally {
+      setImporting(false);
     }
   }
 
@@ -539,6 +696,30 @@ function App() {
 
         {loading && <p>Loading...</p>}
         {error && <p className="error">Error: {error}</p>}
+        <div className="data-tools">
+          <div className="export-tools">
+            <button type="button" onClick={() => handleExport("csv")} disabled={loading || submitting || importing}>
+              Export CSV
+            </button>
+            <button type="button" onClick={() => handleExport("xlsx")} disabled={loading || submitting || importing}>
+              Export XLSX
+            </button>
+            <button type="button" onClick={deleteSelected} disabled={loading || submitting || importing || selectedIds.length === 0}>
+              Delete Selected ({selectedIds.length})
+            </button>
+          </div>
+          <div className="import-tools">
+            <input
+              type="file"
+              accept=".csv,.xlsx"
+              onChange={(e) => setImportFile(e.target.files?.[0] || null)}
+              disabled={loading || submitting || importing}
+            />
+            <button type="button" onClick={handleImport} disabled={loading || submitting || importing}>
+              {importing ? "Importing..." : "Import File"}
+            </button>
+          </div>
+        </div>
         <form className="place-form" onSubmit={submitPlace}>
           <input
             type="text"
@@ -580,6 +761,13 @@ function App() {
               <table>
                 <thead>
                   <tr>
+                    <th>
+                      <input
+                        type="checkbox"
+                        checked={allCurrentPageSelected}
+                        onChange={(e) => toggleSelectCurrentPage(e.target.checked)}
+                      />
+                    </th>
                     <th>Name</th>
                     <th>Longitude</th>
                     <th>Latitude</th>
@@ -589,11 +777,18 @@ function App() {
                 <tbody>
                   {places.length === 0 && (
                     <tr>
-                      <td colSpan={4}>No places found</td>
+                      <td colSpan={5}>No places found</td>
                     </tr>
                   )}
                   {places.map((place) => (
                     <tr key={place.id}>
+                      <td>
+                        <input
+                          type="checkbox"
+                          checked={selectedIds.includes(place.id)}
+                          onChange={(e) => toggleSelect(place.id, e.target.checked)}
+                        />
+                      </td>
                       <td>{place?.properties?.name || "-"}</td>
                       <td>{place?.geometry?.coordinates?.[0] ?? "-"}</td>
                       <td>{place?.geometry?.coordinates?.[1] ?? "-"}</td>
