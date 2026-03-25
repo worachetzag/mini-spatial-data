@@ -4,6 +4,7 @@ import maplibregl from "maplibre-gl";
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
 const DEFAULT_MAP_STYLE =
   "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json";
+const PAGE_SIZE = 10;
 
 const MAP_STYLE_OPTIONS = [
   {
@@ -56,6 +57,9 @@ function App() {
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [viewMode, setViewMode] = useState("table");
+  const [currentPage, setCurrentPage] = useState(1);
+  const [totalRecords, setTotalRecords] = useState(0);
+  const [totalPages, setTotalPages] = useState(0);
   const [selectedPlaceId, setSelectedPlaceId] = useState("");
   const [mapStyleUrl, setMapStyleUrl] = useState(DEFAULT_MAP_STYLE);
   const [form, setForm] = useState({
@@ -87,7 +91,7 @@ function App() {
     }, 2500);
   }
 
-  async function loadPlaces() {
+  async function loadPlaces(targetPage = currentPage) {
     setLoading(true);
     setError("");
     if (!apiUrl) {
@@ -96,12 +100,31 @@ function App() {
       return;
     }
     try {
-      const response = await fetch(apiUrl);
+      const params = new URLSearchParams({
+        page: String(targetPage),
+        limit: String(PAGE_SIZE)
+      });
+      const response = await fetch(`${apiUrl}?${params.toString()}`);
       if (!response.ok) {
         throw new Error(`API error: ${response.status}`);
       }
       const json = await response.json();
-      setPlaces(Array.isArray(json.data) ? json.data : []);
+      const nextPlaces = Array.isArray(json.data) ? json.data : [];
+      const nextTotal = Number(json.total ?? nextPlaces.length ?? 0);
+      const nextLimit = Number(json.limit ?? PAGE_SIZE);
+      const computedTotalPages =
+        nextLimit > 0 ? Math.ceil(nextTotal / nextLimit) : 0;
+      const serverPage = Number(json.page ?? targetPage);
+
+      if (computedTotalPages > 0 && serverPage > computedTotalPages) {
+        await loadPlaces(computedTotalPages);
+        return;
+      }
+
+      setPlaces(nextPlaces);
+      setCurrentPage(serverPage);
+      setTotalRecords(nextTotal);
+      setTotalPages(Number(json.totalPages ?? computedTotalPages));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unknown error");
     } finally {
@@ -160,7 +183,11 @@ function App() {
         clickPopupRef.current = null;
       }
       showToast(editingId ? "Place updated" : "Place created", "success");
-      await loadPlaces();
+      if (editingId) {
+        await loadPlaces(currentPage);
+      } else {
+        await loadPlaces(1);
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Unknown error";
       setError(msg);
@@ -210,7 +237,7 @@ function App() {
         cancelEdit();
       }
       showToast("Place deleted", "success");
-      await loadPlaces();
+      await loadPlaces(currentPage);
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Unknown error";
       setError(msg);
@@ -254,8 +281,15 @@ function App() {
   }
 
   useEffect(() => {
-    loadPlaces();
+    setCurrentPage(1);
+    loadPlaces(1);
   }, [apiUrl]);
+
+  function goToPage(nextPage) {
+    if (loading || submitting) return;
+    if (nextPage < 1 || (totalPages > 0 && nextPage > totalPages)) return;
+    loadPlaces(nextPage);
+  }
 
   useEffect(() => {
     if (viewMode !== "map") return;
@@ -484,7 +518,7 @@ function App() {
 
         <div className="panel-title">
           <h2>Places</h2>
-          <span className="count">{places.length} records</span>
+          <span className="count">{totalRecords} records</span>
         </div>
         <div className="view-switch">
           <button
@@ -541,60 +575,84 @@ function App() {
         </p>
 
         {viewMode === "table" && (
-          <div className="table-wrap">
-            <table>
-            <thead>
-              <tr>
-                <th>Name</th>
-                <th>Longitude</th>
-                <th>Latitude</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {places.length === 0 && (
-                <tr>
-                  <td colSpan={4}>No places found</td>
-                </tr>
-              )}
-              {places.map((place) => (
-                <tr key={place.id}>
-                  <td>{place?.properties?.name || "-"}</td>
-                  <td>{place?.geometry?.coordinates?.[0] ?? "-"}</td>
-                  <td>{place?.geometry?.coordinates?.[1] ?? "-"}</td>
-                  <td className="actions">
-                    <button
-                      type="button"
-                      onClick={() => showOnMap(place)}
-                      disabled={submitting}
-                    >
-                      Show on map
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => startEdit(place)}
-                      disabled={submitting}
-                    >
-                      Edit
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setDeleteTarget({
-                          id: place.id,
-                          name: place?.properties?.name || ""
-                        })
-                      }
-                      disabled={submitting}
-                    >
-                      Delete
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-            </table>
-          </div>
+          <>
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Name</th>
+                    <th>Longitude</th>
+                    <th>Latitude</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {places.length === 0 && (
+                    <tr>
+                      <td colSpan={4}>No places found</td>
+                    </tr>
+                  )}
+                  {places.map((place) => (
+                    <tr key={place.id}>
+                      <td>{place?.properties?.name || "-"}</td>
+                      <td>{place?.geometry?.coordinates?.[0] ?? "-"}</td>
+                      <td>{place?.geometry?.coordinates?.[1] ?? "-"}</td>
+                      <td className="actions">
+                        <button
+                          type="button"
+                          onClick={() => showOnMap(place)}
+                          disabled={submitting}
+                        >
+                          Show on map
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => startEdit(place)}
+                          disabled={submitting}
+                        >
+                          Edit
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setDeleteTarget({
+                              id: place.id,
+                              name: place?.properties?.name || ""
+                            })
+                          }
+                          disabled={submitting}
+                        >
+                          Delete
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="pagination">
+              <span>
+                Showing {places.length} of {totalRecords} records
+              </span>
+              <button
+                type="button"
+                onClick={() => goToPage(currentPage - 1)}
+                disabled={currentPage <= 1 || loading || submitting}
+              >
+                Previous
+              </button>
+              <span>
+                Page {totalPages === 0 ? 0 : currentPage} / {totalPages}
+              </span>
+              <button
+                type="button"
+                onClick={() => goToPage(currentPage + 1)}
+                disabled={totalPages === 0 || currentPage >= totalPages || loading || submitting}
+              >
+                Next
+              </button>
+            </div>
+          </>
         )}
 
         {viewMode === "map" && (

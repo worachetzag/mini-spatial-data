@@ -7,6 +7,7 @@ import (
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
 type Repository struct {
@@ -19,19 +20,30 @@ func NewRepository(db *mongo.Database) *Repository {
 	}
 }
 
-func (r *Repository) List(ctx context.Context) ([]Place, error) {
-	cur, err := r.collection.Find(ctx, bson.D{})
+func (r *Repository) List(ctx context.Context, page int64, limit int64) ([]Place, int64, error) {
+	total, err := r.collection.CountDocuments(ctx, bson.D{})
 	if err != nil {
-		return nil, err
+		return nil, 0, err
+	}
+
+	skip := (page - 1) * limit
+	findOptions := options.Find().
+		SetLimit(limit).
+		SetSkip(skip).
+		SetSort(bson.D{{Key: "_id", Value: -1}})
+
+	cur, err := r.collection.Find(ctx, bson.D{}, findOptions)
+	if err != nil {
+		return nil, 0, err
 	}
 	defer cur.Close(ctx)
 
 	places := make([]Place, 0)
 	if err := cur.All(ctx, &places); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
-	return places, nil
+	return places, total, nil
 }
 
 func (r *Repository) Create(ctx context.Context, place *Place) (primitive.ObjectID, error) {

@@ -262,6 +262,27 @@ thead th {
   cursor: pointer;
 }
 
+.pagination {
+  margin-top: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.pagination button {
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  padding: 6px 10px;
+  background: #fff;
+  cursor: pointer;
+}
+
+.pagination span {
+  color: #334155;
+  font-size: 14px;
+}
+
 @media (max-width: 900px) {
   .place-form {
     grid-template-columns: 1fr 1fr;
@@ -321,5 +342,9 @@ thead th {
 
   .map-container {
     min-height: 300px;
+  }
+
+  .pagination {
+    justify-content: space-between;
   }
 }

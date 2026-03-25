@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -23,24 +24,64 @@ type UpdatePlaceInput struct {
 	Type       *string        `json:"type"`
 }
 
+const (
+	defaultPage  int64 = 1
+	defaultLimit int64 = 10
+	maxLimit     int64 = 100
+)
+
 func NewHandler(repo *Repository) *Handler {
 	return &Handler{repo: repo}
 }
 
 func (h *Handler) List(c echo.Context) error {
+	page := defaultPage
+	if raw := strings.TrimSpace(c.QueryParam("page")); raw != "" {
+		v, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || v < 1 {
+			return c.JSON(http.StatusBadRequest, map[string]string{
+				"error": "page must be a positive integer",
+			})
+		}
+		page = v
+	}
+
+	limit := defaultLimit
+	if raw := strings.TrimSpace(c.QueryParam("limit")); raw != "" {
+		v, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || v < 1 {
+			return c.JSON(http.StatusBadRequest, map[string]string{
+				"error": "limit must be a positive integer",
+			})
+		}
+		if v > maxLimit {
+			v = maxLimit
+		}
+		limit = v
+	}
+
 	ctx, cancel := context.WithTimeout(c.Request().Context(), 5*time.Second)
 	defer cancel()
 
-	places, err := h.repo.List(ctx)
+	places, total, err := h.repo.List(ctx, page, limit)
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{
 			"error": "failed to load places",
 		})
 	}
 
+	totalPages := int64(0)
+	if total > 0 {
+		totalPages = (total + limit - 1) / limit
+	}
+
 	return c.JSON(http.StatusOK, map[string]any{
-		"count": len(places),
-		"data":  places,
+		"count":      len(places),
+		"data":       places,
+		"page":       page,
+		"limit":      limit,
+		"total":      total,
+		"totalPages": totalPages,
 	})
 }
 
