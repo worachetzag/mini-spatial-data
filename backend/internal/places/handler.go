@@ -69,10 +69,12 @@ func (h *Handler) List(c echo.Context) error {
 		limit = v
 	}
 
+	nameQuery := strings.TrimSpace(c.QueryParam("q"))
+
 	ctx, cancel := context.WithTimeout(c.Request().Context(), 5*time.Second)
 	defer cancel()
 
-	places, total, err := h.repo.List(ctx, page, limit)
+	places, total, err := h.repo.List(ctx, page, limit, nameQuery)
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{
 			"error": "failed to load places",

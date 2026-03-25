@@ -3,6 +3,8 @@ package places
 import (
 	"context"
 	"fmt"
+	"regexp"
+	"strings"
 
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
@@ -20,8 +22,14 @@ func NewRepository(db *mongo.Database) *Repository {
 	}
 }
 
-func (r *Repository) List(ctx context.Context, page int64, limit int64) ([]Place, int64, error) {
-	total, err := r.collection.CountDocuments(ctx, bson.D{})
+func (r *Repository) List(ctx context.Context, page int64, limit int64, nameQuery string) ([]Place, int64, error) {
+	filter := any(bson.D{})
+	if q := strings.TrimSpace(nameQuery); q != "" {
+		pattern := regexp.QuoteMeta(q)
+		filter = bson.M{"properties.name": bson.M{"$regex": pattern, "$options": "i"}}
+	}
+
+	total, err := r.collection.CountDocuments(ctx, filter)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -32,7 +40,7 @@ func (r *Repository) List(ctx context.Context, page int64, limit int64) ([]Place
 		SetSkip(skip).
 		SetSort(bson.D{{Key: "_id", Value: -1}})
 
-	cur, err := r.collection.Find(ctx, bson.D{}, findOptions)
+	cur, err := r.collection.Find(ctx, filter, findOptions)
 	if err != nil {
 		return nil, 0, err
 	}

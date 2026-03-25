@@ -6,19 +6,6 @@ const DEFAULT_MAP_STYLE =
   "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json";
 const PAGE_SIZE = 10;
 
-const MAP_STYLE_OPTIONS = [
-  {
-    id: "light",
-    label: "White",
-    url: DEFAULT_MAP_STYLE
-  },
-  {
-    id: "dark",
-    label: "Dark",
-    url: "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json"
-  }
-];
-
 function extractPointCoordinates(list) {
   return list
     .map((place) => place?.geometry?.coordinates)
@@ -61,25 +48,30 @@ function App() {
   const [totalRecords, setTotalRecords] = useState(0);
   const [totalPages, setTotalPages] = useState(0);
   const [selectedPlaceId, setSelectedPlaceId] = useState("");
-  const [mapStyleUrl, setMapStyleUrl] = useState(DEFAULT_MAP_STYLE);
   const [form, setForm] = useState({
     name: "",
     lng: "",
     lat: ""
   });
   const [editingId, setEditingId] = useState("");
-  const [pickedPointLabel, setPickedPointLabel] = useState("");
   const [toasts, setToasts] = useState([]);
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [selectedIds, setSelectedIds] = useState([]);
   const [importFile, setImportFile] = useState(null);
   const [importing, setImporting] = useState(false);
+  const [showAddForm, setShowAddForm] = useState(false);
+  const [filterInput, setFilterInput] = useState("");
+  const [appliedFilter, setAppliedFilter] = useState("");
   const mapContainerRef = React.useRef(null);
   const mapRef = React.useRef(null);
   const markersRef = React.useRef([]);
   const markerByIdRef = React.useRef({});
   const draftMarkerRef = React.useRef(null);
   const clickPopupRef = React.useRef(null);
+  const placesRef = React.useRef(places);
+  const createPlaceFromMapRef = React.useRef(async () => {});
+
+  placesRef.current = places;
 
   const apiUrl = useMemo(
     () => (API_BASE_URL ? `${API_BASE_URL}/api/places` : ""),
@@ -106,7 +98,8 @@ function App() {
     }, 2500);
   }
 
-  async function loadPlaces(targetPage = currentPage) {
+  async function loadPlaces(targetPage = currentPage, filterOverride) {
+    const q = filterOverride !== undefined ? filterOverride : appliedFilter;
     setLoading(true);
     setError("");
     if (!apiUrl) {
@@ -119,6 +112,9 @@ function App() {
         page: String(targetPage),
         limit: String(PAGE_SIZE)
       });
+      if (q.trim()) {
+        params.set("q", q.trim());
+      }
       const response = await fetch(`${apiUrl}?${params.toString()}`);
       if (!response.ok) {
         throw new Error(`API error: ${response.status}`);
@@ -132,7 +128,7 @@ function App() {
       const serverPage = Number(json.page ?? targetPage);
 
       if (computedTotalPages > 0 && serverPage > computedTotalPages) {
-        await loadPlaces(computedTotalPages);
+        await loadPlaces(computedTotalPages, q);
         return;
       }
 
@@ -306,6 +302,7 @@ function App() {
 
     setSubmitting(true);
     setError("");
+    const isEdit = Boolean(editingId);
     try {
       const method = editingId ? "PATCH" : "POST";
       const url = editingId ? `${apiUrl}/${editingId}` : apiUrl;
@@ -330,7 +327,7 @@ function App() {
       }
       setForm({ name: "", lng: "", lat: "" });
       setEditingId("");
-      setPickedPointLabel("");
+      setShowAddForm(false);
       if (draftMarkerRef.current) {
         draftMarkerRef.current.remove();
         draftMarkerRef.current = null;
@@ -339,8 +336,8 @@ function App() {
         clickPopupRef.current.remove();
         clickPopupRef.current = null;
       }
-      showToast(editingId ? "Place updated" : "Place created", "success");
-      if (editingId) {
+      showToast(isEdit ? "Place updated" : "Place created", "success");
+      if (isEdit) {
         await loadPlaces(currentPage);
       } else {
         await loadPlaces(1);
@@ -355,6 +352,7 @@ function App() {
   }
 
   function startEdit(place) {
+    setShowAddForm(false);
     setEditingId(place.id);
     setForm({
       name: place?.properties?.name || "",
@@ -365,8 +363,8 @@ function App() {
 
   function cancelEdit() {
     setEditingId("");
+    setShowAddForm(false);
     setForm({ name: "", lng: "", lat: "" });
-    setPickedPointLabel("");
     if (draftMarkerRef.current) {
       draftMarkerRef.current.remove();
       draftMarkerRef.current = null;
@@ -425,7 +423,6 @@ function App() {
   function changeViewMode(mode) {
     setViewMode(mode);
     setSelectedPlaceId("");
-    setPickedPointLabel("");
     if (draftMarkerRef.current) {
       draftMarkerRef.current.remove();
       draftMarkerRef.current = null;
@@ -434,12 +431,13 @@ function App() {
       clickPopupRef.current.remove();
       clickPopupRef.current = null;
     }
-    showToast(`Switched to ${mode} view`, "info");
   }
 
   useEffect(() => {
     setCurrentPage(1);
-    loadPlaces(1);
+    setFilterInput("");
+    setAppliedFilter("");
+    loadPlaces(1, "");
   }, [apiUrl]);
 
   function goToPage(nextPage) {
@@ -447,6 +445,62 @@ function App() {
     if (nextPage < 1 || (totalPages > 0 && nextPage > totalPages)) return;
     loadPlaces(nextPage);
   }
+
+  function applyNameFilter() {
+    const next = filterInput.trim();
+    setAppliedFilter(next);
+    loadPlaces(1, next);
+  }
+
+  function clearNameFilter() {
+    setFilterInput("");
+    setAppliedFilter("");
+    loadPlaces(1, "");
+  }
+
+  function openAddForm() {
+    setEditingId("");
+    setForm({ name: "", lng: "", lat: "" });
+    setShowAddForm(true);
+  }
+
+  createPlaceFromMapRef.current = async (lng, lat, name) => {
+    if (!apiUrl) {
+      showToast("Missing VITE_API_BASE_URL", "error");
+      return false;
+    }
+    const trimmed = name.trim();
+    if (!trimmed) {
+      showToast("Please enter a place name", "error");
+      return false;
+    }
+    setSubmitting(true);
+    setError("");
+    try {
+      const response = await fetch(apiUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          type: "Feature",
+          geometry: { type: "Point", coordinates: [lng, lat] },
+          properties: { name: trimmed }
+        })
+      });
+      if (!response.ok) {
+        throw new Error(`Save failed: ${response.status}`);
+      }
+      showToast("Place created", "success");
+      await loadPlaces(1);
+      return true;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Unknown error";
+      setError(msg);
+      showToast(msg, "error");
+      return false;
+    } finally {
+      setSubmitting(false);
+    }
+  };
 
   useEffect(() => {
     if (viewMode !== "map") return;
@@ -459,19 +513,22 @@ function App() {
 
     mapRef.current = new maplibregl.Map({
       container: mapContainerRef.current,
-      style: mapStyleUrl,
+      style: DEFAULT_MAP_STYLE,
       center: initialCenter,
       zoom: initialZoom
     });
 
-    mapRef.current.addControl(new maplibregl.NavigationControl(), "top-right");
-
     const handleMapClick = (event) => {
+      const target = event.originalEvent?.target;
+      if (target && target.closest && target.closest(".map-marker-wrap")) {
+        return;
+      }
+
       const lng = Number(event.lngLat.lng.toFixed(6));
       const lat = Number(event.lngLat.lat.toFixed(6));
 
       let nearest = null;
-      places.forEach((place) => {
+      placesRef.current.forEach((place) => {
         const coords = place?.geometry?.coordinates;
         if (!Array.isArray(coords) || coords.length < 2) return;
         const pLng = Number(coords[0]);
@@ -492,7 +549,6 @@ function App() {
       }
 
       if (isExactExistingPoint) {
-        setPickedPointLabel("");
         if (draftMarkerRef.current) {
           draftMarkerRef.current.remove();
           draftMarkerRef.current = null;
@@ -500,13 +556,6 @@ function App() {
         showToast("Clicked existing place", "info");
         return;
       }
-
-      setForm((prev) => ({
-        ...prev,
-        lng: String(lng),
-        lat: String(lat)
-      }));
-      setPickedPointLabel(`${lng}, ${lat}`);
 
       if (draftMarkerRef.current) {
         draftMarkerRef.current.remove();
@@ -517,11 +566,81 @@ function App() {
         .setLngLat([lng, lat])
         .addTo(mapRef.current);
 
-      clickPopupRef.current = new maplibregl.Popup({ offset: 20 })
+      const container = document.createElement("div");
+      container.className = "map-popup-add";
+
+      const coordsLine = document.createElement("p");
+      coordsLine.className = "map-popup-coords";
+      coordsLine.textContent = `lat ${lat}, lon ${lng}`;
+
+      const input = document.createElement("input");
+      input.type = "text";
+      input.className = "map-popup-input";
+      input.placeholder = "Place name";
+      input.setAttribute("autocomplete", "off");
+
+      const actions = document.createElement("div");
+      actions.className = "map-popup-actions";
+
+      const btnCancel = document.createElement("button");
+      btnCancel.type = "button";
+      btnCancel.className = "map-popup-btn map-popup-btn-cancel";
+      btnCancel.textContent = "Cancel";
+
+      const btnAdd = document.createElement("button");
+      btnAdd.type = "button";
+      btnAdd.className = "map-popup-btn map-popup-btn-primary";
+      btnAdd.textContent = "Add";
+
+      actions.appendChild(btnCancel);
+      actions.appendChild(btnAdd);
+      container.appendChild(coordsLine);
+      container.appendChild(input);
+      container.appendChild(actions);
+
+      const clearDraft = () => {
+        if (draftMarkerRef.current) {
+          draftMarkerRef.current.remove();
+          draftMarkerRef.current = null;
+        }
+      };
+
+      const closePopup = () => {
+        if (clickPopupRef.current) {
+          clickPopupRef.current.remove();
+          clickPopupRef.current = null;
+        }
+        clearDraft();
+      };
+
+      btnCancel.addEventListener("click", closePopup);
+
+      btnAdd.addEventListener("click", async () => {
+        const ok = await createPlaceFromMapRef.current(lng, lat, input.value);
+        if (!ok) return;
+        if (clickPopupRef.current) {
+          clickPopupRef.current.remove();
+        }
+      });
+
+      const popup = new maplibregl.Popup({
+        offset: 20,
+        closeButton: true,
+        closeOnClick: false
+      })
         .setLngLat([lng, lat])
-        .setHTML(`<div><strong>Picked point</strong><br/>lat: ${lat}<br/>lon: ${lng}</div>`)
+        .setDOMContent(container)
         .addTo(mapRef.current);
-      showToast("Picked coordinates from map", "info");
+
+      clickPopupRef.current = popup;
+      popup.on("close", () => {
+        clearDraft();
+        clickPopupRef.current = null;
+      });
+
+      window.setTimeout(() => {
+        input.focus();
+      }, 0);
     };
 
     mapRef.current.on("click", handleMapClick);
@@ -549,26 +668,6 @@ function App() {
 
   useEffect(() => {
     if (!mapRef.current) return;
-    if (!mapStyleUrl) return;
-    const map = mapRef.current;
-    const currentCenter = map.getCenter();
-    const currentZoom = map.getZoom();
-    const currentBearing = map.getBearing();
-    const currentPitch = map.getPitch();
-
-    map.setStyle(mapStyleUrl);
-    map.once("style.load", () => {
-      map.jumpTo({
-        center: currentCenter,
-        zoom: currentZoom,
-        bearing: currentBearing,
-        pitch: currentPitch
-      });
-    });
-  }, [mapStyleUrl]);
-
-  useEffect(() => {
-    if (!mapRef.current) return;
 
     markersRef.current.forEach((marker) => marker.remove());
     markersRef.current = [];
@@ -585,12 +684,22 @@ function App() {
       const lat = Number(coords[1]);
       if (Number.isNaN(lng) || Number.isNaN(lat)) return;
 
-      const markerEl = document.createElement("button");
-      markerEl.type = "button";
-      markerEl.className = "map-marker";
-      markerEl.setAttribute("aria-label", name);
+      const markerWrapEl = document.createElement("div");
+      markerWrapEl.className = "map-marker-wrap";
 
-      const marker = new maplibregl.Marker({ element: markerEl })
+      const markerDotEl = document.createElement("button");
+      markerDotEl.type = "button";
+      markerDotEl.className = "map-marker";
+      markerDotEl.setAttribute("aria-label", name);
+
+      const markerLabelEl = document.createElement("span");
+      markerLabelEl.className = "map-marker-label";
+      markerLabelEl.textContent = name;
+
+      markerWrapEl.appendChild(markerDotEl);
+      markerWrapEl.appendChild(markerLabelEl);
+
+      const marker = new maplibregl.Marker({ element: markerWrapEl })
         .setLngLat([lng, lat])
         .setPopup(
           new maplibregl.Popup({ offset: 24 }).setHTML(
@@ -644,7 +753,7 @@ function App() {
       </div>
       <header className="header">
         <h1>Mini Spatial Data</h1>
-        <p>Places list from backend API</p>
+        {/* <p>Places list from backend API</p> */}
       </header>
 
       <section className="panel">
@@ -673,10 +782,6 @@ function App() {
           </div>
         )}
 
-        <div className="panel-title">
-          <h2>Places</h2>
-          <span className="count">{totalRecords} records</span>
-        </div>
         <div className="view-switch">
           <button
             type="button"
@@ -696,67 +801,92 @@ function App() {
 
         {loading && <p>Loading...</p>}
         {error && <p className="error">Error: {error}</p>}
-        <div className="data-tools">
-          <div className="export-tools">
-            <button type="button" onClick={() => handleExport("csv")} disabled={loading || submitting || importing}>
-              Export CSV
-            </button>
-            <button type="button" onClick={() => handleExport("xlsx")} disabled={loading || submitting || importing}>
-              Export XLSX
-            </button>
-            <button type="button" onClick={deleteSelected} disabled={loading || submitting || importing || selectedIds.length === 0}>
-              Delete Selected ({selectedIds.length})
-            </button>
-          </div>
-          <div className="import-tools">
-            <input
-              type="file"
-              accept=".csv,.xlsx"
-              onChange={(e) => setImportFile(e.target.files?.[0] || null)}
-              disabled={loading || submitting || importing}
-            />
-            <button type="button" onClick={handleImport} disabled={loading || submitting || importing}>
-              {importing ? "Importing..." : "Import File"}
-            </button>
-          </div>
-        </div>
-        <form className="place-form" onSubmit={submitPlace}>
-          <input
-            type="text"
-            placeholder="Place name"
-            value={form.name}
-            onChange={(e) => setForm((prev) => ({ ...prev, name: e.target.value }))}
-          />
-          <input
-            type="number"
-            step="any"
-            placeholder="Longitude"
-            value={form.lng}
-            onChange={(e) => setForm((prev) => ({ ...prev, lng: e.target.value }))}
-          />
-          <input
-            type="number"
-            step="any"
-            placeholder="Latitude"
-            value={form.lat}
-            onChange={(e) => setForm((prev) => ({ ...prev, lat: e.target.value }))}
-          />
-          <button type="submit" disabled={submitting}>
-            {editingId ? "Update" : "Add"}
-          </button>
-          {editingId && (
-            <button type="button" onClick={cancelEdit} disabled={submitting}>
-              Cancel
-            </button>
-          )}
-        </form>
-        <p className="map-help">
-          Tip: click on the map to auto-fill coordinates.
-          {pickedPointLabel && ` Picked: ${pickedPointLabel}.`}
-        </p>
-
         {viewMode === "table" && (
           <>
+            <div className="panel-title">
+              <h2>Places</h2>
+              <button type="button" className="btn-primary" onClick={openAddForm} disabled={loading || submitting}>
+                Add place
+              </button>
+            </div>
+            <div className="filter-row">
+              <input
+                type="search"
+                className="filter-input"
+                placeholder="Filter by name (contains)"
+                value={filterInput}
+                onChange={(e) => setFilterInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") applyNameFilter();
+                }}
+                disabled={loading || submitting}
+              />
+              <button type="button" onClick={applyNameFilter} disabled={loading || submitting}>
+                Search
+              </button>
+              <button type="button" onClick={clearNameFilter} disabled={loading || submitting}>
+                Clear
+              </button>
+            </div>
+            <div className="data-tools">
+              <div className="export-tools">
+                <button type="button" onClick={() => handleExport("csv")} disabled={loading || submitting || importing}>
+                  Export CSV
+                </button>
+                <button type="button" onClick={() => handleExport("xlsx")} disabled={loading || submitting || importing}>
+                  Export XLSX
+                </button>
+                <button type="button" onClick={deleteSelected} disabled={loading || submitting || importing || selectedIds.length === 0}>
+                  Delete Selected ({selectedIds.length})
+                </button>
+              </div>
+              <div className="import-tools">
+                <input
+                  type="file"
+                  accept=".csv,.xlsx"
+                  onChange={(e) => setImportFile(e.target.files?.[0] || null)}
+                  disabled={loading || submitting || importing}
+                />
+                <button type="button" onClick={handleImport} disabled={loading || submitting || importing}>
+                  {importing ? "Importing..." : "Import File"}
+                </button>
+              </div>
+            </div>
+            {(showAddForm || editingId) && (
+              <form className="place-form" onSubmit={submitPlace}>
+                <input
+                  type="text"
+                  placeholder="Place name"
+                  value={form.name}
+                  onChange={(e) => setForm((prev) => ({ ...prev, name: e.target.value }))}
+                />
+                <input
+                  type="number"
+                  step="any"
+                  placeholder="Longitude"
+                  value={form.lng}
+                  onChange={(e) => setForm((prev) => ({ ...prev, lng: e.target.value }))}
+                />
+                <input
+                  type="number"
+                  step="any"
+                  placeholder="Latitude"
+                  value={form.lat}
+                  onChange={(e) => setForm((prev) => ({ ...prev, lat: e.target.value }))}
+                />
+                <button type="submit" disabled={submitting}>
+                  {editingId ? "Update" : "Add"}
+                </button>
+                {(editingId || showAddForm) && (
+                  <button type="button" onClick={cancelEdit} disabled={submitting}>
+                    Cancel
+                  </button>
+                )}
+              </form>
+            )}
+            <p className="map-help">
+              Tip: open Map and click the map to add a place — type the name in the popup and press Add.
+            </p>
             <div className="table-wrap">
               <table>
                 <thead>
@@ -852,24 +982,8 @@ function App() {
 
         {viewMode === "map" && (
           <>
-            <div className="map-meta">
-              <span>Interactive map view</span>
-              <span>{places.length} point(s)</span>
-            </div>
-            <label className="map-style-row">
-              <span>Map style:</span>
-              <select
-                value={mapStyleUrl}
-                onChange={(e) => setMapStyleUrl(e.target.value)}
-              >
-                {MAP_STYLE_OPTIONS.map((opt) => (
-                  <option key={opt.id} value={opt.url}>
-                    {opt.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <div ref={mapContainerRef} className="map-container" />
+            <p className="map-view-hint">Click the map to add a place — enter the name in the popup and tap Add.</p>
+            <div ref={mapContainerRef} className="map-container map-container-full" />
           </>
         )}
       </section>
