@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 
 	"go.mongodb.org/mongo-driver/bson"
@@ -22,11 +23,18 @@ func NewRepository(db *mongo.Database) *Repository {
 	}
 }
 
-func (r *Repository) List(ctx context.Context, page int64, limit int64, nameQuery string) ([]Place, int64, error) {
-	filter := any(bson.D{})
+func (r *Repository) List(ctx context.Context, page int64, limit int64, nameQuery, collectionQuery string) ([]Place, int64, error) {
+	filter := bson.M{}
 	if q := strings.TrimSpace(nameQuery); q != "" {
 		pattern := regexp.QuoteMeta(q)
-		filter = bson.M{"properties.name": bson.M{"$regex": pattern, "$options": "i"}}
+		filter["$or"] = []bson.M{
+			{"properties.name": bson.M{"$regex": pattern, "$options": "i"}},
+			{"properties.collection": bson.M{"$regex": pattern, "$options": "i"}},
+		}
+	}
+	if c := strings.TrimSpace(collectionQuery); c != "" {
+		pattern := regexp.QuoteMeta(c)
+		filter["properties.collection"] = bson.M{"$regex": pattern, "$options": "i"}
 	}
 
 	total, err := r.collection.CountDocuments(ctx, filter)
@@ -155,4 +163,50 @@ func (r *Repository) UpdateByID(ctx context.Context, id primitive.ObjectID, setF
 		return false, err
 	}
 	return res.MatchedCount > 0, nil
+}
+
+func (r *Repository) RenameCollectionProperty(ctx context.Context, oldName, newName string) (int64, error) {
+	filter := bson.M{"properties.collection": oldName}
+	update := bson.M{"$set": bson.M{"properties.collection": newName}}
+	res, err := r.collection.UpdateMany(ctx, filter, update)
+	if err != nil {
+		return 0, err
+	}
+	return res.ModifiedCount, nil
+}
+
+func (r *Repository) ClearCollectionProperty(ctx context.Context, name string) (int64, error) {
+	filter := bson.M{"properties.collection": name}
+	update := bson.M{"$unset": bson.M{"properties.collection": ""}}
+	res, err := r.collection.UpdateMany(ctx, filter, update)
+	if err != nil {
+		return 0, err
+	}
+	return res.ModifiedCount, nil
+}
+
+func (r *Repository) DistinctCollections(ctx context.Context) ([]string, error) {
+	vals, err := r.collection.Distinct(ctx, "properties.collection", bson.M{})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(vals))
+	seen := map[string]struct{}{}
+	for _, v := range vals {
+		s, ok := v.(string)
+		if !ok {
+			continue
+		}
+		s = strings.TrimSpace(s)
+		if s == "" {
+			continue
+		}
+		if _, dup := seen[s]; dup {
+			continue
+		}
+		seen[s] = struct{}{}
+		out = append(out, s)
+	}
+	sort.Strings(out)
+	return out, nil
 }

@@ -3,6 +3,7 @@ package places
 import (
 	"context"
 	"encoding/csv"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -70,11 +71,12 @@ func (h *Handler) List(c echo.Context) error {
 	}
 
 	nameQuery := strings.TrimSpace(c.QueryParam("q"))
+	collectionQuery := strings.TrimSpace(c.QueryParam("collection"))
 
 	ctx, cancel := context.WithTimeout(c.Request().Context(), 5*time.Second)
 	defer cancel()
 
-	places, total, err := h.repo.List(ctx, page, limit, nameQuery)
+	places, total, err := h.repo.List(ctx, page, limit, nameQuery, collectionQuery)
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{
 			"error": "failed to load places",
@@ -93,6 +95,22 @@ func (h *Handler) List(c echo.Context) error {
 		"limit":      limit,
 		"total":      total,
 		"totalPages": totalPages,
+	})
+}
+
+func (h *Handler) Collections(c echo.Context) error {
+	ctx, cancel := context.WithTimeout(c.Request().Context(), 5*time.Second)
+	defer cancel()
+
+	list, err := h.repo.DistinctCollections(ctx)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{
+			"error": "failed to list collections",
+		})
+	}
+
+	return c.JSON(http.StatusOK, map[string]any{
+		"data": list,
 	})
 }
 
@@ -263,7 +281,6 @@ func (h *Handler) Create(c echo.Context) error {
 	}
 
 	input.Type = strings.TrimSpace(input.Type)
-	input.Geometry.Type = strings.TrimSpace(input.Geometry.Type)
 	if input.Type == "" {
 		input.Type = "Feature"
 	}
@@ -274,15 +291,16 @@ func (h *Handler) Create(c echo.Context) error {
 		})
 	}
 
-	if input.Geometry.Type != "Point" || len(input.Geometry.Coordinates) != 2 {
+	if err := validateAndNormalizeGeometry(&input.Geometry); err != nil {
 		return c.JSON(http.StatusBadRequest, map[string]string{
-			"error": "geometry must be Point with [lng, lat]",
+			"error": err.Error(),
 		})
 	}
 
 	if input.Properties == nil {
 		input.Properties = map[string]any{}
 	}
+	trimCollectionInProperties(input.Properties)
 
 	ctx, cancel := context.WithTimeout(c.Request().Context(), 5*time.Second)
 	defer cancel()
@@ -387,16 +405,16 @@ func (h *Handler) UpdateByID(c echo.Context) error {
 	}
 
 	if input.Geometry != nil {
-		input.Geometry.Type = strings.TrimSpace(input.Geometry.Type)
-		if input.Geometry.Type != "Point" || len(input.Geometry.Coordinates) != 2 {
+		if err := validateAndNormalizeGeometry(input.Geometry); err != nil {
 			return c.JSON(http.StatusBadRequest, map[string]string{
-				"error": "geometry must be Point with [lng, lat]",
+				"error": err.Error(),
 			})
 		}
 		setFields["geometry"] = input.Geometry
 	}
 
 	if input.Properties != nil {
+		trimCollectionInProperties(input.Properties)
 		setFields["properties"] = input.Properties
 	}
 
@@ -431,26 +449,40 @@ func (h *Handler) UpdateByID(c echo.Context) error {
 	return c.JSON(http.StatusOK, place)
 }
 
+func trimCollectionInProperties(props map[string]any) {
+	if props == nil {
+		return
+	}
+	raw, ok := props["collection"]
+	if !ok || raw == nil {
+		return
+	}
+	switch v := raw.(type) {
+	case string:
+		props["collection"] = strings.TrimSpace(v)
+	default:
+		props["collection"] = strings.TrimSpace(fmt.Sprint(v))
+	}
+}
+
 func buildCSV(places []Place) ([]byte, error) {
 	var builder strings.Builder
 	writer := csv.NewWriter(&builder)
-	if err := writer.Write([]string{"id", "type", "geometry_type", "longitude", "latitude", "name"}); err != nil {
+	if err := writer.Write([]string{"id", "type", "geometry_type", "collection", "longitude", "latitude", "coordinates_json", "name"}); err != nil {
 		return nil, err
 	}
 	for _, place := range places {
-		lng := ""
-		lat := ""
-		if len(place.Geometry.Coordinates) >= 2 {
-			lng = strconv.FormatFloat(place.Geometry.Coordinates[0], 'f', -1, 64)
-			lat = strconv.FormatFloat(place.Geometry.Coordinates[1], 'f', -1, 64)
-		}
+		lng, lat, coordsJSON := ExportCoordinateSummary(place.Geometry)
 		name := strings.TrimSpace(fmt.Sprintf("%v", place.Properties["name"]))
+		collection := propertyCollection(place.Properties)
 		if err := writer.Write([]string{
 			place.ID.Hex(),
 			place.Type,
 			place.Geometry.Type,
+			collection,
 			lng,
 			lat,
+			coordsJSON,
 			name,
 		}); err != nil {
 			return nil, err
@@ -466,7 +498,7 @@ func buildCSV(places []Place) ([]byte, error) {
 func buildXLSX(places []Place) ([]byte, error) {
 	file := excelize.NewFile()
 	sheet := file.GetSheetName(0)
-	headers := []string{"id", "type", "geometry_type", "longitude", "latitude", "name"}
+	headers := []string{"id", "type", "geometry_type", "collection", "longitude", "latitude", "coordinates_json", "name"}
 
 	for i, header := range headers {
 		cell, _ := excelize.CoordinatesToCellName(i+1, 1)
@@ -477,14 +509,10 @@ func buildXLSX(places []Place) ([]byte, error) {
 
 	for rowIdx, place := range places {
 		row := rowIdx + 2
-		lng := ""
-		lat := ""
-		if len(place.Geometry.Coordinates) >= 2 {
-			lng = strconv.FormatFloat(place.Geometry.Coordinates[0], 'f', -1, 64)
-			lat = strconv.FormatFloat(place.Geometry.Coordinates[1], 'f', -1, 64)
-		}
+		lng, lat, coordsJSON := ExportCoordinateSummary(place.Geometry)
 		name := strings.TrimSpace(fmt.Sprintf("%v", place.Properties["name"]))
-		values := []string{place.ID.Hex(), place.Type, place.Geometry.Type, lng, lat, name}
+		collection := propertyCollection(place.Properties)
+		values := []string{place.ID.Hex(), place.Type, place.Geometry.Type, collection, lng, lat, coordsJSON, name}
 		for col, value := range values {
 			cell, _ := excelize.CoordinatesToCellName(col+1, row)
 			if err := file.SetCellValue(sheet, cell, value); err != nil {
@@ -563,6 +591,8 @@ func parseRowsByHeader(rows [][]string) ([]Place, error) {
 
 	typeIdx, hasType := headerMap["type"]
 	geometryTypeIdx, hasGeometryType := firstExistingIndex(headerMap, []string{"geometry_type", "geometrytype"})
+	collectionIdx, hasCollection := headerMap["collection"]
+	coordsJSONIdx, hasCoordsJSON := firstExistingIndex(headerMap, []string{"coordinates_json", "coordinatesjson"})
 
 	places := make([]Place, 0, len(rows)-1)
 	for i, row := range rows[1:] {
@@ -578,8 +608,16 @@ func parseRowsByHeader(rows [][]string) ([]Place, error) {
 		if hasGeometryType {
 			geometryType = cellValue(row, geometryTypeIdx)
 		}
+		collection := ""
+		if hasCollection {
+			collection = cellValue(row, collectionIdx)
+		}
+		coordsJSON := ""
+		if hasCoordsJSON {
+			coordsJSON = cellValue(row, coordsJSONIdx)
+		}
 
-		place, err := parsePlaceRow(featureType, geometryType, lon, lat, name, i+2)
+		place, err := parsePlaceRow(featureType, geometryType, collection, coordsJSON, lon, lat, name, i+2)
 		if err != nil {
 			return nil, err
 		}
@@ -611,7 +649,7 @@ func cellValue(row []string, idx int) string {
 	return row[idx]
 }
 
-func parsePlaceRow(featureType, geometryType, lngRaw, latRaw, nameRaw string, rowNumber int) (Place, error) {
+func parsePlaceRow(featureType, geometryType, collection, coordsJSONRaw, lngRaw, latRaw, nameRaw string, rowNumber int) (Place, error) {
 	placeType := strings.TrimSpace(featureType)
 	if placeType == "" {
 		placeType = "Feature"
@@ -624,33 +662,54 @@ func parsePlaceRow(featureType, geometryType, lngRaw, latRaw, nameRaw string, ro
 	if geoType == "" {
 		geoType = "Point"
 	}
-	if geoType != "Point" {
-		return Place{}, fmt.Errorf("row %d: geometry_type must be Point", rowNumber)
-	}
-
-	lng, err := strconv.ParseFloat(strings.TrimSpace(lngRaw), 64)
-	if err != nil {
-		return Place{}, fmt.Errorf("row %d: invalid longitude", rowNumber)
-	}
-	lat, err := strconv.ParseFloat(strings.TrimSpace(latRaw), 64)
-	if err != nil {
-		return Place{}, fmt.Errorf("row %d: invalid latitude", rowNumber)
-	}
 
 	name := strings.TrimSpace(nameRaw)
 	if name == "" {
 		return Place{}, fmt.Errorf("row %d: name is required", rowNumber)
 	}
 
+	collection = strings.TrimSpace(collection)
+
+	var coords any
+	switch geoType {
+	case "Point":
+		lng, err := strconv.ParseFloat(strings.TrimSpace(lngRaw), 64)
+		if err != nil {
+			return Place{}, fmt.Errorf("row %d: invalid longitude", rowNumber)
+		}
+		lat, err := strconv.ParseFloat(strings.TrimSpace(latRaw), 64)
+		if err != nil {
+			return Place{}, fmt.Errorf("row %d: invalid latitude", rowNumber)
+		}
+		coords = []float64{lng, lat}
+	case "LineString", "Polygon":
+		raw := strings.TrimSpace(coordsJSONRaw)
+		if raw == "" {
+			return Place{}, fmt.Errorf("row %d: coordinates_json is required for geometry_type %s", rowNumber, geoType)
+		}
+		var parsed any
+		if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
+			return Place{}, fmt.Errorf("row %d: invalid coordinates_json: %w", rowNumber, err)
+		}
+		coords = parsed
+	default:
+		return Place{}, fmt.Errorf("row %d: unsupported geometry_type %q (use Point, LineString, or Polygon)", rowNumber, geoType)
+	}
+
+	g := Geometry{Type: geoType, Coordinates: coords}
+	if err := validateAndNormalizeGeometry(&g); err != nil {
+		return Place{}, fmt.Errorf("row %d: %w", rowNumber, err)
+	}
+
+	props := map[string]any{"name": name}
+	if collection != "" {
+		props["collection"] = collection
+	}
+
 	return Place{
-		Type: placeType,
-		Geometry: Geometry{
-			Type:        geoType,
-			Coordinates: []float64{lng, lat},
-		},
-		Properties: map[string]any{
-			"name": name,
-		},
+		Type:       placeType,
+		Geometry:   g,
+		Properties: props,
 	}, nil
 }
 

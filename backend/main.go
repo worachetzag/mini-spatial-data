@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/home/mini-spatial-data/backend/internal/collections"
 	"github.com/home/mini-spatial-data/backend/internal/places"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
@@ -75,8 +76,11 @@ func main() {
 		AllowHeaders: []string{echo.HeaderOrigin, echo.HeaderContentType, echo.HeaderAccept},
 	}))
 
-	placeRepo := places.NewRepository(client.Database(mongoDBName()))
+	db := client.Database(mongoDBName())
+	placeRepo := places.NewRepository(db)
 	placeHandler := places.NewHandler(placeRepo)
+	collRepo := collections.NewRepository(db)
+	collHandler := collections.NewHandler(collRepo, placeRepo)
 
 	e.GET("/health", func(c echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]string{
@@ -84,7 +88,13 @@ func main() {
 			"mongo":  "up",
 		})
 	})
+	e.GET("/api/collections", collHandler.List)
+	e.POST("/api/collections", collHandler.Create)
+	e.PATCH("/api/collections/:id", collHandler.Update)
+	e.DELETE("/api/collections/:id", collHandler.Delete)
+
 	e.GET("/api/places", placeHandler.List)
+	e.GET("/api/places/collections", placeHandler.Collections)
 	e.GET("/api/places/export", placeHandler.Export)
 	e.POST("/api/places/import", placeHandler.Import)
 	e.POST("/api/places/bulk-delete", placeHandler.DeleteMany)

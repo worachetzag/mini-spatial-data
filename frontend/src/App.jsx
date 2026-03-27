@@ -13,10 +13,131 @@ function extractPointCoordinates(list) {
       (coords) =>
         Array.isArray(coords) &&
         coords.length >= 2 &&
+        typeof coords[0] === "number" &&
+        typeof coords[1] === "number" &&
         !Number.isNaN(Number(coords[0])) &&
         !Number.isNaN(Number(coords[1]))
     )
     .map((coords) => [Number(coords[0]), Number(coords[1])]);
+}
+
+function walkLngLatCoords(coords, visit) {
+  if (!coords) return;
+  if (typeof coords[0] === "number" && typeof coords[1] === "number") {
+    visit(Number(coords[0]), Number(coords[1]));
+    return;
+  }
+  if (Array.isArray(coords)) {
+    coords.forEach((c) => walkLngLatCoords(c, visit));
+  }
+}
+
+function placesToFeatureCollection(places) {
+  const features = [];
+  for (const place of places) {
+    if (!place?.id || !place.geometry?.type) continue;
+    const coll = String(place?.properties?.collection ?? "").trim();
+    features.push({
+      type: "Feature",
+      properties: {
+        placeId: place.id,
+        name: place?.properties?.name || "Unnamed place",
+        collection: coll
+      },
+      geometry: {
+        type: place.geometry.type,
+        coordinates: place.geometry.coordinates
+      }
+    });
+  }
+  return { type: "FeatureCollection", features };
+}
+
+function boundsFromPlaces(places) {
+  const bounds = new maplibregl.LngLatBounds();
+  let n = 0;
+  for (const place of places) {
+    walkLngLatCoords(place?.geometry?.coordinates, (lng, lat) => {
+      if (!Number.isNaN(lng) && !Number.isNaN(lat)) {
+        bounds.extend([lng, lat]);
+        n += 1;
+      }
+    });
+  }
+  return n > 0 ? bounds : null;
+}
+
+function normalizeHexColor(input) {
+  let s = String(input ?? "").trim();
+  if (!s) return "#64748b";
+  if (!s.startsWith("#")) s = `#${s}`;
+  if (/^#[0-9A-Fa-f]{3}$/.test(s)) {
+    const r = s[1];
+    const g = s[2];
+    const b = s[3];
+    s = `#${r}${r}${g}${g}${b}${b}`;
+  }
+  if (!/^#[0-9A-Fa-f]{6}$/.test(s)) return "";
+  return s.toLowerCase();
+}
+
+function buildColorMatchFromRegistry(managedList) {
+  const flat = [];
+  for (const c of managedList) {
+    const n = String(c.name ?? "").trim();
+    if (!n) continue;
+    const col = normalizeHexColor(c.color) || "#64748b";
+    flat.push(n, col);
+  }
+  return ["match", ["get", "collection"], ...flat, "#94a3b8"];
+}
+
+function buildHiddenCollectionFilter(hiddenKeys) {
+  if (!hiddenKeys || hiddenKeys.length === 0) return null;
+  const parts = hiddenKeys.map((c) => ["==", ["get", "collection"], c]);
+  return ["!", ["any", ...parts]];
+}
+
+function combineLayerFilter(geomFilter, hiddenFilter) {
+  if (!hiddenFilter) return geomFilter;
+  return ["all", geomFilter, hiddenFilter];
+}
+
+function nearestPointPlace(lng, lat, places) {
+  let nearest = null;
+  for (const place of places) {
+    if (place?.geometry?.type !== "Point") continue;
+    const coords = place.geometry.coordinates;
+    if (!Array.isArray(coords) || coords.length < 2) continue;
+    const pLng = Number(coords[0]);
+    const pLat = Number(coords[1]);
+    if (Number.isNaN(pLng) || Number.isNaN(pLat)) continue;
+    const meters = distanceMeters(lat, lng, pLat, pLng);
+    if (!nearest || meters < nearest.meters) {
+      nearest = { place, meters };
+    }
+  }
+  return nearest;
+}
+
+function escapeHtml(s) {
+  return String(s)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function summarizeCoordsCell(geometry) {
+  if (!geometry?.type) return "-";
+  if (geometry.type === "Point" && Array.isArray(geometry.coordinates)) {
+    const a = geometry.coordinates[0];
+    const b = geometry.coordinates[1];
+    if (typeof a === "number" && typeof b === "number") {
+      return `${a}, ${b}`;
+    }
+  }
+  return geometry.type;
 }
 
 function distanceMeters(lat1, lng1, lat2, lng2) {
@@ -50,8 +171,11 @@ function App() {
   const [selectedPlaceId, setSelectedPlaceId] = useState("");
   const [form, setForm] = useState({
     name: "",
+    collection: "",
+    geometryType: "Point",
     lng: "",
-    lat: ""
+    lat: "",
+    coordsJson: ""
   });
   const [editingId, setEditingId] = useState("");
   const [toasts, setToasts] = useState([]);
@@ -62,12 +186,20 @@ function App() {
   const [showAddForm, setShowAddForm] = useState(false);
   const [filterInput, setFilterInput] = useState("");
   const [appliedFilter, setAppliedFilter] = useState("");
+  const [managedCollections, setManagedCollections] = useState([]);
+  const [registryDraft, setRegistryDraft] = useState([]);
+  const [newCollectionName, setNewCollectionName] = useState("");
+  const [newCollectionColor, setNewCollectionColor] = useState("#2563eb");
+  const [collDeleteTarget, setCollDeleteTarget] = useState(null);
+  const [mapStyleReady, setMapStyleReady] = useState(false);
+  const [hiddenMapCollections, setHiddenMapCollections] = useState([]);
   const mapContainerRef = React.useRef(null);
   const mapRef = React.useRef(null);
-  const markersRef = React.useRef([]);
-  const markerByIdRef = React.useRef({});
+  const managedCollectionsRef = React.useRef([]);
+  managedCollectionsRef.current = managedCollections;
   const draftMarkerRef = React.useRef(null);
   const clickPopupRef = React.useRef(null);
+  const selectionPopupRef = React.useRef(null);
   const placesRef = React.useRef(places);
   const createPlaceFromMapRef = React.useRef(async () => {});
 
@@ -89,6 +221,38 @@ function App() {
     () => (API_BASE_URL ? `${API_BASE_URL}/api/places/bulk-delete` : ""),
     []
   );
+  const registryCollectionsUrl = useMemo(
+    () => (API_BASE_URL ? `${API_BASE_URL}/api/collections` : ""),
+    []
+  );
+
+  const distinctCollectionKeys = useMemo(() => {
+    const s = new Set();
+    managedCollections.forEach((c) => {
+      s.add(String(c.name ?? "").trim());
+    });
+    places.forEach((p) => {
+      s.add(String(p?.properties?.collection ?? "").trim());
+    });
+    return Array.from(s).sort((a, b) => {
+      if (a === "") return -1;
+      if (b === "") return 1;
+      return a.localeCompare(b);
+    });
+  }, [managedCollections, places]);
+
+  const mapCollectionColorByName = useMemo(() => {
+    const m = {};
+    for (const c of managedCollections) {
+      const n = String(c.name ?? "").trim();
+      if (n) m[n] = normalizeHexColor(c.color) || "#64748b";
+    }
+    return m;
+  }, [managedCollections]);
+
+  useEffect(() => {
+    setRegistryDraft(managedCollections);
+  }, [managedCollections]);
 
   function showToast(message, kind = "info") {
     const id = toastId();
@@ -98,7 +262,7 @@ function App() {
     }, 2500);
   }
 
-  async function loadPlaces(targetPage = currentPage, filterOverride) {
+  async function loadPlaces(targetPage = currentPage, filterOverride, collectionOverride) {
     const q = filterOverride !== undefined ? filterOverride : appliedFilter;
     setLoading(true);
     setError("");
@@ -202,6 +366,7 @@ function App() {
       const deleted = Number(payload.deleted || 0);
       showToast(`Deleted ${deleted} selected record(s)`, "success");
       setSelectedIds([]);
+      await fetchManagedCollections();
       await loadPlaces(currentPage);
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Unknown error";
@@ -275,6 +440,7 @@ function App() {
       const inserted = Number(payload.inserted || 0);
       showToast(`Imported ${inserted} records`, "success");
       setImportFile(null);
+      await fetchManagedCollections();
       await loadPlaces(1);
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Unknown error";
@@ -286,18 +452,46 @@ function App() {
   }
 
   async function submitPlace(event) {
-    event.preventDefault();
+    if (event && typeof event.preventDefault === "function") {
+      event.preventDefault();
+    }
     if (!apiUrl) {
       setError("Missing VITE_API_BASE_URL");
       showToast("Missing VITE_API_BASE_URL", "error");
       return;
     }
-    const lng = Number(form.lng);
-    const lat = Number(form.lat);
-    if (!form.name.trim() || Number.isNaN(lng) || Number.isNaN(lat)) {
-      setError("Please provide name, longitude, and latitude");
-      showToast("Please provide name, longitude, and latitude", "error");
+    if (!form.name.trim()) {
+      setError("Please provide a place name");
+      showToast("Please provide a place name", "error");
       return;
+    }
+
+    let geometry;
+    if (form.geometryType === "Point") {
+      const lng = Number(form.lng);
+      const lat = Number(form.lat);
+      if (Number.isNaN(lng) || Number.isNaN(lat)) {
+        setError("Please provide valid longitude and latitude");
+        showToast("Please provide valid longitude and latitude", "error");
+        return;
+      }
+      geometry = { type: "Point", coordinates: [lng, lat] };
+    } else {
+      let parsed;
+      try {
+        parsed = JSON.parse(form.coordsJson.trim());
+      } catch {
+        setError("Coordinates JSON is invalid");
+        showToast("Coordinates JSON is invalid", "error");
+        return;
+      }
+      geometry = { type: form.geometryType, coordinates: parsed };
+    }
+
+    const properties = { name: form.name.trim() };
+    const coll = form.collection.trim();
+    if (coll) {
+      properties.collection = coll;
     }
 
     setSubmitting(true);
@@ -307,14 +501,11 @@ function App() {
       const method = editingId ? "PATCH" : "POST";
       const url = editingId ? `${apiUrl}/${editingId}` : apiUrl;
       const body = editingId
-        ? {
-            properties: { name: form.name.trim() },
-            geometry: { type: "Point", coordinates: [lng, lat] }
-          }
+        ? { properties, geometry }
         : {
             type: "Feature",
-            geometry: { type: "Point", coordinates: [lng, lat] },
-            properties: { name: form.name.trim() }
+            geometry,
+            properties
           };
 
       const response = await fetch(url, {
@@ -325,7 +516,14 @@ function App() {
       if (!response.ok) {
         throw new Error(`Save failed: ${response.status}`);
       }
-      setForm({ name: "", lng: "", lat: "" });
+      setForm({
+        name: "",
+        collection: "",
+        geometryType: "Point",
+        lng: "",
+        lat: "",
+        coordsJson: ""
+      });
       setEditingId("");
       setShowAddForm(false);
       if (draftMarkerRef.current) {
@@ -337,6 +535,7 @@ function App() {
         clickPopupRef.current = null;
       }
       showToast(isEdit ? "Place updated" : "Place created", "success");
+      await fetchManagedCollections();
       if (isEdit) {
         await loadPlaces(currentPage);
       } else {
@@ -354,17 +553,41 @@ function App() {
   function startEdit(place) {
     setShowAddForm(false);
     setEditingId(place.id);
+    const gType = place?.geometry?.type || "Point";
+    let lng = "";
+    let lat = "";
+    let coordsJson = "";
+    if (gType === "Point" && Array.isArray(place?.geometry?.coordinates)) {
+      lng = String(place.geometry.coordinates[0] ?? "");
+      lat = String(place.geometry.coordinates[1] ?? "");
+    } else {
+      try {
+        coordsJson = JSON.stringify(place.geometry.coordinates, null, 2);
+      } catch {
+        coordsJson = "";
+      }
+    }
     setForm({
       name: place?.properties?.name || "",
-      lng: String(place?.geometry?.coordinates?.[0] ?? ""),
-      lat: String(place?.geometry?.coordinates?.[1] ?? "")
+      collection: String(place?.properties?.collection ?? "").trim(),
+      geometryType: gType === "LineString" || gType === "Polygon" ? gType : "Point",
+      lng,
+      lat,
+      coordsJson
     });
   }
 
   function cancelEdit() {
     setEditingId("");
     setShowAddForm(false);
-    setForm({ name: "", lng: "", lat: "" });
+    setForm({
+      name: "",
+      collection: "",
+      geometryType: "Point",
+      lng: "",
+      lat: "",
+      coordsJson: ""
+    });
     if (draftMarkerRef.current) {
       draftMarkerRef.current.remove();
       draftMarkerRef.current = null;
@@ -392,6 +615,7 @@ function App() {
         cancelEdit();
       }
       showToast("Place deleted", "success");
+      await fetchManagedCollections();
       await loadPlaces(currentPage);
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Unknown error";
@@ -431,6 +655,130 @@ function App() {
       clickPopupRef.current.remove();
       clickPopupRef.current = null;
     }
+    if (selectionPopupRef.current) {
+      selectionPopupRef.current.remove();
+      selectionPopupRef.current = null;
+    }
+  }
+
+  async function fetchManagedCollections() {
+    if (!registryCollectionsUrl) return;
+    try {
+      const response = await fetch(registryCollectionsUrl);
+      if (!response.ok) return;
+      const json = await response.json();
+      if (Array.isArray(json.data)) {
+        setManagedCollections(json.data);
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+
+  useEffect(() => {
+    fetchManagedCollections();
+  }, [registryCollectionsUrl]);
+
+  function updateCollectionDraft(id, patch) {
+    setRegistryDraft((prev) => prev.map((r) => (r.id === id ? { ...r, ...patch } : r)));
+  }
+
+  async function saveCollectionRow(row) {
+    if (!registryCollectionsUrl) {
+      showToast("Missing VITE_API_BASE_URL", "error");
+      return;
+    }
+    const name = String(row.name ?? "").trim();
+    const color = normalizeHexColor(row.color);
+    if (!name) {
+      showToast("Collection name is required", "error");
+      return;
+    }
+    if (!color) {
+      showToast("Color must be #RRGGBB hex", "error");
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const response = await fetch(`${registryCollectionsUrl}/${row.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, color })
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        throw new Error(payload.error || `Save failed: ${response.status}`);
+      }
+      showToast("Collection saved", "success");
+      await fetchManagedCollections();
+      await loadPlaces(currentPage);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Unknown error";
+      showToast(msg, "error");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function handleAddManagedCollection() {
+    if (!registryCollectionsUrl) {
+      showToast("Missing VITE_API_BASE_URL", "error");
+      return;
+    }
+    const name = newCollectionName.trim();
+    const color = normalizeHexColor(newCollectionColor);
+    if (!name) {
+      showToast("Collection name is required", "error");
+      return;
+    }
+    if (!color) {
+      showToast("Color must be #RRGGBB hex", "error");
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const response = await fetch(registryCollectionsUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, color })
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        throw new Error(payload.error || `Add failed: ${response.status}`);
+      }
+      setNewCollectionName("");
+      setNewCollectionColor("#2563eb");
+      showToast("Collection created", "success");
+      await fetchManagedCollections();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Unknown error";
+      showToast(msg, "error");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function confirmCollectionDelete() {
+    if (!collDeleteTarget || !registryCollectionsUrl) return;
+    setSubmitting(true);
+    try {
+      const response = await fetch(`${registryCollectionsUrl}/${collDeleteTarget.id}`, {
+        method: "DELETE"
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        throw new Error(payload.error || `Delete failed: ${response.status}`);
+      }
+      showToast("Collection deleted; places were unassigned", "success");
+      setCollDeleteTarget(null);
+      await fetchManagedCollections();
+      await loadPlaces(currentPage);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Unknown error";
+      showToast(msg, "error");
+    } finally {
+      setSubmitting(false);
+    }
   }
 
   useEffect(() => {
@@ -443,6 +791,17 @@ function App() {
   function goToPage(nextPage) {
     if (loading || submitting) return;
     if (nextPage < 1 || (totalPages > 0 && nextPage > totalPages)) return;
+    if (editingId) {
+      setEditingId("");
+      setForm({
+        name: "",
+        collection: "",
+        geometryType: "Point",
+        lng: "",
+        lat: "",
+        coordsJson: ""
+      });
+    }
     loadPlaces(nextPage);
   }
 
@@ -458,13 +817,26 @@ function App() {
     loadPlaces(1, "");
   }
 
+  function toggleMapCollectionVisibility(key) {
+    setHiddenMapCollections((prev) =>
+      prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key]
+    );
+  }
+
   function openAddForm() {
     setEditingId("");
-    setForm({ name: "", lng: "", lat: "" });
+    setForm({
+      name: "",
+      collection: "",
+      geometryType: "Point",
+      lng: "",
+      lat: "",
+      coordsJson: ""
+    });
     setShowAddForm(true);
   }
 
-  createPlaceFromMapRef.current = async (lng, lat, name) => {
+  createPlaceFromMapRef.current = async (lng, lat, name, collection = "") => {
     if (!apiUrl) {
       showToast("Missing VITE_API_BASE_URL", "error");
       return false;
@@ -473,6 +845,11 @@ function App() {
     if (!trimmed) {
       showToast("Please enter a place name", "error");
       return false;
+    }
+    const props = { name: trimmed };
+    const c = String(collection).trim();
+    if (c) {
+      props.collection = c;
     }
     setSubmitting(true);
     setError("");
@@ -483,13 +860,14 @@ function App() {
         body: JSON.stringify({
           type: "Feature",
           geometry: { type: "Point", coordinates: [lng, lat] },
-          properties: { name: trimmed }
+          properties: props
         })
       });
       if (!response.ok) {
         throw new Error(`Save failed: ${response.status}`);
       }
       showToast("Place created", "success");
+      await fetchManagedCollections();
       await loadPlaces(1);
       return true;
     } catch (err) {
@@ -507,42 +885,39 @@ function App() {
     if (!mapContainerRef.current) return;
     if (mapRef.current) return;
 
-    const points = extractPointCoordinates(places);
+    const points = extractPointCoordinates(placesRef.current);
     const initialCenter = points.length > 0 ? points[0] : [100.5018, 13.7563];
     const initialZoom = points.length > 0 ? 10 : 5;
 
-    mapRef.current = new maplibregl.Map({
+    const map = new maplibregl.Map({
       container: mapContainerRef.current,
       style: DEFAULT_MAP_STYLE,
       center: initialCenter,
       zoom: initialZoom
     });
+    mapRef.current = map;
+    let cancelled = false;
 
     const handleMapClick = (event) => {
-      const target = event.originalEvent?.target;
-      if (target && target.closest && target.closest(".map-marker-wrap")) {
+      const layersHit = ["places-poly-fill", "places-line", "places-point"];
+      const picked = map.queryRenderedFeatures(event.point, { layers: layersHit });
+      if (picked.length > 0) {
+        const props = picked[0].properties || {};
+        const title = props.name || "Place";
+        const coll = props.collection ? String(props.collection) : "Uncategorized";
+        new maplibregl.Popup({ offset: 12, closeButton: true })
+          .setLngLat(event.lngLat)
+          .setHTML(
+            `<div class="map-hit-popup"><strong>${escapeHtml(title)}</strong><br/>${escapeHtml(coll)}</div>`
+          )
+          .addTo(map);
         return;
       }
 
       const lng = Number(event.lngLat.lng.toFixed(6));
       const lat = Number(event.lngLat.lat.toFixed(6));
 
-      let nearest = null;
-      placesRef.current.forEach((place) => {
-        const coords = place?.geometry?.coordinates;
-        if (!Array.isArray(coords) || coords.length < 2) return;
-        const pLng = Number(coords[0]);
-        const pLat = Number(coords[1]);
-        if (Number.isNaN(pLng) || Number.isNaN(pLat)) return;
-        const meters = distanceMeters(lat, lng, pLat, pLng);
-        if (!nearest || meters < nearest.meters) {
-          nearest = {
-            name: place?.properties?.name || "Unnamed place",
-            meters
-          };
-        }
-      });
-
+      const nearest = nearestPointPlace(lng, lat, placesRef.current);
       const isExactExistingPoint = nearest && nearest.meters <= 8;
       if (clickPopupRef.current) {
         clickPopupRef.current.remove();
@@ -564,7 +939,7 @@ function App() {
       draftEl.className = "map-marker map-marker-draft";
       draftMarkerRef.current = new maplibregl.Marker({ element: draftEl })
         .setLngLat([lng, lat])
-        .addTo(mapRef.current);
+        .addTo(map);
 
       const container = document.createElement("div");
       container.className = "map-popup-add";
@@ -578,6 +953,23 @@ function App() {
       input.className = "map-popup-input";
       input.placeholder = "Place name";
       input.setAttribute("autocomplete", "off");
+
+      const collLabel = document.createElement("label");
+      collLabel.className = "map-popup-label";
+      collLabel.textContent = "Collection";
+      const collInput = document.createElement("select");
+      collInput.className = "map-popup-select";
+      const optEmpty = document.createElement("option");
+      optEmpty.value = "";
+      optEmpty.textContent = "ไม่ระบุ";
+      collInput.appendChild(optEmpty);
+      managedCollectionsRef.current.forEach((c) => {
+        const o = document.createElement("option");
+        o.value = c.name;
+        o.textContent = c.name;
+        collInput.appendChild(o);
+      });
+      collInput.value = "";
 
       const actions = document.createElement("div");
       actions.className = "map-popup-actions";
@@ -596,6 +988,8 @@ function App() {
       actions.appendChild(btnAdd);
       container.appendChild(coordsLine);
       container.appendChild(input);
+      container.appendChild(collLabel);
+      container.appendChild(collInput);
       container.appendChild(actions);
 
       const clearDraft = () => {
@@ -616,7 +1010,7 @@ function App() {
       btnCancel.addEventListener("click", closePopup);
 
       btnAdd.addEventListener("click", async () => {
-        const ok = await createPlaceFromMapRef.current(lng, lat, input.value);
+        const ok = await createPlaceFromMapRef.current(lng, lat, input.value, collInput.value || "");
         if (!ok) return;
         if (clickPopupRef.current) {
           clickPopupRef.current.remove();
@@ -630,7 +1024,7 @@ function App() {
       })
         .setLngLat([lng, lat])
         .setDOMContent(container)
-        .addTo(mapRef.current);
+        .addTo(map);
 
       clickPopupRef.current = popup;
       popup.on("close", () => {
@@ -643,14 +1037,87 @@ function App() {
       }, 0);
     };
 
-    mapRef.current.on("click", handleMapClick);
+    map.once("load", () => {
+      if (cancelled) return;
+      map.addSource("places", {
+        type: "geojson",
+        data: { type: "FeatureCollection", features: [] },
+        promoteId: "placeId"
+      });
+      map.addLayer({
+        id: "places-poly-fill",
+        type: "fill",
+        source: "places",
+        filter: ["==", ["geometry-type"], "Polygon"],
+        paint: {
+          "fill-color": "#64748b",
+          "fill-opacity": 0.38,
+          "fill-outline-color": "#0f172a"
+        }
+      });
+      map.addLayer({
+        id: "places-line",
+        type: "line",
+        source: "places",
+        filter: ["==", ["geometry-type"], "LineString"],
+        layout: { "line-cap": "round", "line-join": "round" },
+        paint: {
+          "line-color": "#64748b",
+          "line-width": 3
+        }
+      });
+      map.addLayer({
+        id: "places-point",
+        type: "circle",
+        source: "places",
+        filter: ["==", ["geometry-type"], "Point"],
+        paint: {
+          "circle-radius": 7,
+          "circle-color": "#64748b",
+          "circle-stroke-width": 1.5,
+          "circle-stroke-color": "#ffffff"
+        }
+      });
+      map.addLayer({
+        id: "places-point-label",
+        type: "symbol",
+        source: "places",
+        filter: ["==", ["geometry-type"], "Point"],
+        layout: {
+          "text-field": [
+            "case",
+            ["has", "name"],
+            ["to-string", ["get", "name"]],
+            "Unnamed place"
+          ],
+          "text-font": ["Noto Sans Regular", "Arial Unicode MS Regular"],
+          "text-offset": [0, 1.35],
+          "text-anchor": "top",
+          "text-size": 12,
+          "text-padding": 4,
+          "text-allow-overlap": true,
+          "text-ignore-placement": true,
+          "symbol-z-order": "source"
+        },
+        paint: {
+          "text-color": "#0f172a",
+          "text-halo-color": "rgba(255,255,255,0.98)",
+          "text-halo-width": 4,
+          "text-halo-blur": 1.1
+        }
+      });
+      map.on("click", handleMapClick);
+      if (!cancelled) {
+        setMapStyleReady(true);
+      }
+    });
 
     return () => {
+      cancelled = true;
+      setMapStyleReady(false);
       if (mapRef.current) {
         mapRef.current.off("click", handleMapClick);
       }
-      markersRef.current.forEach((marker) => marker.remove());
-      markersRef.current = [];
       if (draftMarkerRef.current) {
         draftMarkerRef.current.remove();
         draftMarkerRef.current = null;
@@ -658,6 +1125,10 @@ function App() {
       if (clickPopupRef.current) {
         clickPopupRef.current.remove();
         clickPopupRef.current = null;
+      }
+      if (selectionPopupRef.current) {
+        selectionPopupRef.current.remove();
+        selectionPopupRef.current = null;
       }
       if (mapRef.current) {
         mapRef.current.remove();
@@ -667,80 +1138,78 @@ function App() {
   }, [viewMode]);
 
   useEffect(() => {
-    if (!mapRef.current) return;
+    if (viewMode !== "map" || !mapStyleReady || !mapRef.current) return;
+    const map = mapRef.current;
+    const src = map.getSource("places");
+    if (!src || typeof src.setData !== "function") return;
 
-    markersRef.current.forEach((marker) => marker.remove());
-    markersRef.current = [];
-    markerByIdRef.current = {};
+    const fc = placesToFeatureCollection(places);
+    src.setData(fc);
 
-    const bounds = new maplibregl.LngLatBounds();
-    let pointCount = 0;
+    const colorExpr = buildColorMatchFromRegistry(managedCollections);
+    const hiddenFilter = buildHiddenCollectionFilter(hiddenMapCollections);
+    const fPoly = combineLayerFilter(["==", ["geometry-type"], "Polygon"], hiddenFilter);
+    const fLine = combineLayerFilter(["==", ["geometry-type"], "LineString"], hiddenFilter);
+    const fPoint = combineLayerFilter(["==", ["geometry-type"], "Point"], hiddenFilter);
 
-    places.forEach((place) => {
-      const coords = place?.geometry?.coordinates;
-      const name = place?.properties?.name || "Unnamed place";
-      if (!Array.isArray(coords) || coords.length < 2) return;
-      const lng = Number(coords[0]);
-      const lat = Number(coords[1]);
-      if (Number.isNaN(lng) || Number.isNaN(lat)) return;
+    map.setFilter("places-poly-fill", fPoly);
+    map.setFilter("places-line", fLine);
+    map.setFilter("places-point", fPoint);
+    map.setFilter("places-point-label", fPoint);
 
-      const markerWrapEl = document.createElement("div");
-      markerWrapEl.className = "map-marker-wrap";
+    map.setPaintProperty("places-poly-fill", "fill-color", colorExpr);
+    map.setPaintProperty("places-line", "line-color", colorExpr);
+    map.setPaintProperty("places-point", "circle-color", colorExpr);
 
-      const markerDotEl = document.createElement("button");
-      markerDotEl.type = "button";
-      markerDotEl.className = "map-marker";
-      markerDotEl.setAttribute("aria-label", name);
-
-      const markerLabelEl = document.createElement("span");
-      markerLabelEl.className = "map-marker-label";
-      markerLabelEl.textContent = name;
-
-      markerWrapEl.appendChild(markerDotEl);
-      markerWrapEl.appendChild(markerLabelEl);
-
-      const marker = new maplibregl.Marker({ element: markerWrapEl })
-        .setLngLat([lng, lat])
-        .setPopup(
-          new maplibregl.Popup({ offset: 24 }).setHTML(
-            `<div><strong>${name}</strong><br/>lat: ${lat}<br/>lon: ${lng}</div>`
-          )
-        )
-        .addTo(mapRef.current);
-
-      markersRef.current.push(marker);
-      markerByIdRef.current[place.id] = marker;
-      bounds.extend([lng, lat]);
-      pointCount += 1;
-    });
-
-    if (pointCount > 1) {
-      mapRef.current.fitBounds(bounds, { padding: 60, maxZoom: 12 });
-    } else if (pointCount === 1) {
-      const center = bounds.getCenter();
-      mapRef.current.flyTo({ center, zoom: 12 });
+    const b = boundsFromPlaces(places);
+    if (b) {
+      const sw = b.getSouthWest();
+      const ne = b.getNorthEast();
+      const span = Math.max(Math.abs(ne.lng - sw.lng), Math.abs(ne.lat - sw.lat));
+      if (span < 1e-10) {
+        map.flyTo({ center: [sw.lng, sw.lat], zoom: 13 });
+      } else {
+        map.fitBounds(b, { padding: 60, maxZoom: 14 });
+      }
     }
-  }, [places, viewMode]);
+  }, [places, viewMode, mapStyleReady, hiddenMapCollections, managedCollections]);
 
   useEffect(() => {
-    if (viewMode !== "map") return;
-    if (!selectedPlaceId) return;
-    if (!mapRef.current) return;
-
+    if (viewMode !== "map" || !mapStyleReady || !selectedPlaceId || !mapRef.current) return;
     const target = places.find((place) => place.id === selectedPlaceId);
-    const coords = target?.geometry?.coordinates;
-    if (!target || !Array.isArray(coords) || coords.length < 2) return;
+    if (!target?.geometry) return;
 
-    const lng = Number(coords[0]);
-    const lat = Number(coords[1]);
-    if (Number.isNaN(lng) || Number.isNaN(lat)) return;
+    const map = mapRef.current;
+    const b = boundsFromPlaces([target]);
+    if (!b) return;
 
-    mapRef.current.flyTo({ center: [lng, lat], zoom: 13 });
-    const marker = markerByIdRef.current[selectedPlaceId];
-    if (marker) {
-      marker.togglePopup();
+    if (selectionPopupRef.current) {
+      selectionPopupRef.current.remove();
+      selectionPopupRef.current = null;
     }
-  }, [places, selectedPlaceId, viewMode]);
+
+    const sw = b.getSouthWest();
+    const ne = b.getNorthEast();
+    const span = Math.max(Math.abs(ne.lng - sw.lng), Math.abs(ne.lat - sw.lat));
+    if (span < 1e-10) {
+      map.flyTo({ center: [sw.lng, sw.lat], zoom: 14 });
+    } else {
+      map.fitBounds(b, { padding: 80, maxZoom: 15 });
+    }
+
+    const name = target.properties?.name || "Place";
+    const coll = target.properties?.collection
+      ? String(target.properties.collection)
+      : "Uncategorized";
+    const center = b.getCenter();
+    const popup = new maplibregl.Popup({ offset: 14, closeButton: true })
+      .setLngLat(center)
+      .setHTML(
+        `<div class="map-hit-popup"><strong>${escapeHtml(name)}</strong><br/>${escapeHtml(coll)}</div>`
+      )
+      .addTo(map);
+    selectionPopupRef.current = popup;
+  }, [places, selectedPlaceId, viewMode, mapStyleReady]);
 
   return (
     <main className="page">
@@ -782,6 +1251,34 @@ function App() {
           </div>
         )}
 
+        {collDeleteTarget && (
+          <div className="modal-backdrop" role="dialog" aria-modal="true">
+            <div className="modal-card">
+              <h3>Delete collection?</h3>
+              <p>
+                Remove <strong>{collDeleteTarget.name}</strong>? Places using it will become uncategorized.
+              </p>
+              <div className="modal-actions">
+                <button
+                  type="button"
+                  onClick={() => setCollDeleteTarget(null)}
+                  disabled={submitting}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="danger"
+                  onClick={confirmCollectionDelete}
+                  disabled={submitting}
+                >
+                  Delete
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         <div className="view-switch">
           <button
             type="button"
@@ -797,6 +1294,13 @@ function App() {
           >
             Map
           </button>
+          <button
+            type="button"
+            className={viewMode === "collections" ? "active" : ""}
+            onClick={() => changeViewMode("collections")}
+          >
+            Collections
+          </button>
         </div>
 
         {loading && <p>Loading...</p>}
@@ -805,7 +1309,12 @@ function App() {
           <>
             <div className="panel-title">
               <h2>Places</h2>
-              <button type="button" className="btn-primary" onClick={openAddForm} disabled={loading || submitting}>
+              <button
+                type="button"
+                className="btn-primary"
+                onClick={openAddForm}
+                disabled={loading || submitting || !!editingId}
+              >
                 Add place
               </button>
             </div>
@@ -813,7 +1322,7 @@ function App() {
               <input
                 type="search"
                 className="filter-input"
-                placeholder="Filter by name (contains)"
+                placeholder="Search name or collection (contains)"
                 value={filterInput}
                 onChange={(e) => setFilterInput(e.target.value)}
                 onKeyDown={(e) => {
@@ -852,40 +1361,80 @@ function App() {
                 </button>
               </div>
             </div>
-            {(showAddForm || editingId) && (
-              <form className="place-form" onSubmit={submitPlace}>
+            {showAddForm && !editingId && (
+              <form className="place-form place-form-extended" onSubmit={submitPlace}>
                 <input
                   type="text"
                   placeholder="Place name"
                   value={form.name}
                   onChange={(e) => setForm((prev) => ({ ...prev, name: e.target.value }))}
                 />
-                <input
-                  type="number"
-                  step="any"
-                  placeholder="Longitude"
-                  value={form.lng}
-                  onChange={(e) => setForm((prev) => ({ ...prev, lng: e.target.value }))}
-                />
-                <input
-                  type="number"
-                  step="any"
-                  placeholder="Latitude"
-                  value={form.lat}
-                  onChange={(e) => setForm((prev) => ({ ...prev, lat: e.target.value }))}
-                />
-                <button type="submit" disabled={submitting}>
-                  {editingId ? "Update" : "Add"}
-                </button>
-                {(editingId || showAddForm) && (
-                  <button type="button" onClick={cancelEdit} disabled={submitting}>
-                    Cancel
-                  </button>
+                <select
+                  value={form.collection}
+                  onChange={(e) => setForm((prev) => ({ ...prev, collection: e.target.value }))}
+                  aria-label="Collection"
+                >
+                  <option value="">— ไม่ระบุ —</option>
+                  {form.collection &&
+                    !managedCollections.some((c) => c.name === form.collection) && (
+                      <option value={form.collection}>{form.collection} (unlisted)</option>
+                    )}
+                  {managedCollections.map((c) => (
+                    <option key={c.id} value={c.name}>
+                      {c.name}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  value={form.geometryType}
+                  onChange={(e) => setForm((prev) => ({ ...prev, geometryType: e.target.value }))}
+                  aria-label="Geometry type"
+                >
+                  <option value="Point">Point</option>
+                  <option value="LineString">LineString</option>
+                  <option value="Polygon">Polygon</option>
+                </select>
+                {form.geometryType === "Point" ? (
+                  <>
+                    <input
+                      type="number"
+                      step="any"
+                      placeholder="Longitude"
+                      value={form.lng}
+                      onChange={(e) => setForm((prev) => ({ ...prev, lng: e.target.value }))}
+                    />
+                    <input
+                      type="number"
+                      step="any"
+                      placeholder="Latitude"
+                      value={form.lat}
+                      onChange={(e) => setForm((prev) => ({ ...prev, lat: e.target.value }))}
+                    />
+                  </>
+                ) : (
+                  <textarea
+                    className="place-form-coords"
+                    rows={4}
+                    placeholder={
+                      form.geometryType === "LineString"
+                        ? '[[lng,lat],[lng,lat],...] e.g. [[100.5,13.7],[100.51,13.71]]'
+                        : '[[[lng,lat],...]] closed ring, e.g. [[[100.5,13.7],[100.52,13.7],[100.52,13.72],[100.5,13.72],[100.5,13.7]]]'
+                    }
+                    value={form.coordsJson}
+                    onChange={(e) => setForm((prev) => ({ ...prev, coordsJson: e.target.value }))}
+                  />
                 )}
+                <button type="submit" disabled={submitting}>
+                  Add
+                </button>
+                <button type="button" onClick={cancelEdit} disabled={submitting}>
+                  Cancel
+                </button>
               </form>
             )}
             <p className="map-help">
-              Tip: open Map and click the map to add a place — type the name in the popup and press Add.
+              Tip: Create collections and colors under the Collections tab. Point = click map to add.
+              LineString/Polygon = add form or inline table edit. Polygon rings must close.
             </p>
             <div className="table-wrap">
               <table>
@@ -899,59 +1448,164 @@ function App() {
                       />
                     </th>
                     <th>Name</th>
-                    <th>Longitude</th>
-                    <th>Latitude</th>
+                    <th>Collection</th>
+                    <th>Geometry</th>
+                    <th>Coordinates</th>
                     <th>Actions</th>
                   </tr>
                 </thead>
                 <tbody>
                   {places.length === 0 && (
                     <tr>
-                      <td colSpan={5}>No places found</td>
+                      <td colSpan={6}>No places found</td>
                     </tr>
                   )}
-                  {places.map((place) => (
-                    <tr key={place.id}>
-                      <td>
-                        <input
-                          type="checkbox"
-                          checked={selectedIds.includes(place.id)}
-                          onChange={(e) => toggleSelect(place.id, e.target.checked)}
-                        />
-                      </td>
-                      <td>{place?.properties?.name || "-"}</td>
-                      <td>{place?.geometry?.coordinates?.[0] ?? "-"}</td>
-                      <td>{place?.geometry?.coordinates?.[1] ?? "-"}</td>
-                      <td className="actions">
-                        <button
-                          type="button"
-                          onClick={() => showOnMap(place)}
-                          disabled={submitting}
-                        >
-                          Show on map
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => startEdit(place)}
-                          disabled={submitting}
-                        >
-                          Edit
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setDeleteTarget({
-                              id: place.id,
-                              name: place?.properties?.name || ""
-                            })
-                          }
-                          disabled={submitting}
-                        >
-                          Delete
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
+                  {places.map((place) => {
+                    const isRowEdit = editingId === place.id;
+                    return (
+                      <tr key={place.id} className={isRowEdit ? "table-row-editing" : undefined}>
+                        <td>
+                          <input
+                            type="checkbox"
+                            checked={selectedIds.includes(place.id)}
+                            onChange={(e) => toggleSelect(place.id, e.target.checked)}
+                            disabled={submitting || isRowEdit}
+                          />
+                        </td>
+                        <td>
+                          {isRowEdit ? (
+                            <input
+                              type="text"
+                              className="table-inline-input"
+                              value={form.name}
+                              onChange={(e) => setForm((prev) => ({ ...prev, name: e.target.value }))}
+                              disabled={submitting}
+                            />
+                          ) : (
+                            place?.properties?.name || "-"
+                          )}
+                        </td>
+                        <td>
+                          {isRowEdit ? (
+                            <select
+                              className="table-inline-select"
+                              value={form.collection}
+                              onChange={(e) => setForm((prev) => ({ ...prev, collection: e.target.value }))}
+                              disabled={submitting}
+                              aria-label="Collection"
+                            >
+                              <option value="">— ไม่ระบุ —</option>
+                              {form.collection &&
+                                !managedCollections.some((c) => c.name === form.collection) && (
+                                  <option value={form.collection}>{form.collection} (unlisted)</option>
+                                )}
+                              {managedCollections.map((c) => (
+                                <option key={c.id} value={c.name}>
+                                  {c.name}
+                                </option>
+                              ))}
+                            </select>
+                          ) : (
+                            String(place?.properties?.collection ?? "").trim() || "-"
+                          )}
+                        </td>
+                        <td>
+                          {isRowEdit ? (
+                            <select
+                              className="table-inline-select"
+                              value={form.geometryType}
+                              onChange={(e) => setForm((prev) => ({ ...prev, geometryType: e.target.value }))}
+                              disabled={submitting}
+                              aria-label="Geometry type"
+                            >
+                              <option value="Point">Point</option>
+                              <option value="LineString">LineString</option>
+                              <option value="Polygon">Polygon</option>
+                            </select>
+                          ) : (
+                            place?.geometry?.type || "-"
+                          )}
+                        </td>
+                        <td>
+                          {isRowEdit ? (
+                            form.geometryType === "Point" ? (
+                              <div className="table-inline-ll">
+                                <input
+                                  type="number"
+                                  step="any"
+                                  className="table-inline-input table-inline-input-narrow"
+                                  placeholder="Lng"
+                                  value={form.lng}
+                                  onChange={(e) => setForm((prev) => ({ ...prev, lng: e.target.value }))}
+                                  disabled={submitting}
+                                />
+                                <input
+                                  type="number"
+                                  step="any"
+                                  className="table-inline-input table-inline-input-narrow"
+                                  placeholder="Lat"
+                                  value={form.lat}
+                                  onChange={(e) => setForm((prev) => ({ ...prev, lat: e.target.value }))}
+                                  disabled={submitting}
+                                />
+                              </div>
+                            ) : (
+                              <textarea
+                                className="table-inline-coords"
+                                rows={3}
+                                value={form.coordsJson}
+                                onChange={(e) => setForm((prev) => ({ ...prev, coordsJson: e.target.value }))}
+                                disabled={submitting}
+                              />
+                            )
+                          ) : (
+                            summarizeCoordsCell(place.geometry)
+                          )}
+                        </td>
+                        <td className="actions">
+                          {isRowEdit ? (
+                            <>
+                              <button type="button" onClick={() => submitPlace()} disabled={submitting}>
+                                Save
+                              </button>
+                              <button type="button" onClick={cancelEdit} disabled={submitting}>
+                                Cancel
+                              </button>
+                            </>
+                          ) : (
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => showOnMap(place)}
+                                disabled={submitting || (!!editingId && editingId !== place.id)}
+                              >
+                                Show on map
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => startEdit(place)}
+                                disabled={submitting || (!!editingId && editingId !== place.id) || showAddForm}
+                              >
+                                Edit
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setDeleteTarget({
+                                    id: place.id,
+                                    name: place?.properties?.name || ""
+                                  })
+                                }
+                                disabled={submitting || !!editingId}
+                              >
+                                Delete
+                              </button>
+                            </>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -982,8 +1636,151 @@ function App() {
 
         {viewMode === "map" && (
           <>
-            <p className="map-view-hint">Click the map to add a place — enter the name in the popup and tap Add.</p>
+            <p className="map-view-hint">
+              Polygons (filled) and lines use colors by collection. Points: click empty map to add. Toggle
+              layers in the legend.
+            </p>
+            <div className="map-legend">
+              <span className="map-legend-title">Collections</span>
+              {distinctCollectionKeys.map((key) => {
+                const label = key === "" ? "Uncategorized" : key;
+                const visible = !hiddenMapCollections.includes(key);
+                const color =
+                  key === "" ? "#94a3b8" : mapCollectionColorByName[key] || "#cbd5e1";
+                return (
+                  <button
+                    key={key === "" ? "__empty__" : key}
+                    type="button"
+                    className={`map-legend-chip ${visible ? "" : "map-legend-chip-off"}`}
+                    onClick={() => toggleMapCollectionVisibility(key)}
+                    title={visible ? "Click to hide on map" : "Click to show on map"}
+                  >
+                    <span className="map-legend-swatch" style={{ background: color }} aria-hidden />
+                    {label}
+                  </button>
+                );
+              })}
+            </div>
             <div ref={mapContainerRef} className="map-container map-container-full" />
+          </>
+        )}
+
+        {viewMode === "collections" && (
+          <>
+            <div className="panel-title collections-panel-head">
+              <div>
+                <h2>Collections</h2>
+                <p className="collections-intro">
+                  Add, edit, or delete categories and pick map colors. Places link by exact name match.
+                </p>
+              </div>
+            </div>
+            <div className="collections-add-bar">
+              <input
+                type="text"
+                className="collections-add-name"
+                placeholder="New collection name"
+                value={newCollectionName}
+                onChange={(e) => setNewCollectionName(e.target.value)}
+                disabled={submitting}
+              />
+              <label className="collections-color-picker-wrap">
+                <span className="sr-only">Color</span>
+                <input
+                  type="color"
+                  value={normalizeHexColor(newCollectionColor) || "#2563eb"}
+                  onChange={(e) => setNewCollectionColor(e.target.value)}
+                  disabled={submitting}
+                />
+              </label>
+              <input
+                type="text"
+                className="collections-hex-input"
+                placeholder="#2563eb"
+                value={newCollectionColor}
+                onChange={(e) => setNewCollectionColor(e.target.value)}
+                disabled={submitting}
+                spellCheck={false}
+              />
+              <button
+                type="button"
+                className="btn-primary"
+                onClick={handleAddManagedCollection}
+                disabled={submitting}
+              >
+                Add collection
+              </button>
+            </div>
+            <div className="table-wrap">
+              <table className="collections-registry-table">
+                <thead>
+                  <tr>
+                    <th>Name</th>
+                    <th>Map color</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {registryDraft.length === 0 && (
+                    <tr>
+                      <td colSpan={3} className="collections-empty">
+                        No collections yet — add one above.
+                      </td>
+                    </tr>
+                  )}
+                  {registryDraft.map((row) => (
+                    <tr key={row.id}>
+                      <td>
+                        <input
+                          type="text"
+                          className="table-inline-input"
+                          value={row.name}
+                          onChange={(e) => updateCollectionDraft(row.id, { name: e.target.value })}
+                          disabled={submitting}
+                        />
+                      </td>
+                      <td>
+                        <div className="collections-color-cell">
+                          <input
+                            type="color"
+                            value={normalizeHexColor(row.color) || "#64748b"}
+                            onChange={(e) => updateCollectionDraft(row.id, { color: e.target.value })}
+                            disabled={submitting}
+                            aria-label="Pick color"
+                          />
+                          <input
+                            type="text"
+                            className="collections-hex-input"
+                            value={row.color}
+                            onChange={(e) => updateCollectionDraft(row.id, { color: e.target.value })}
+                            disabled={submitting}
+                            spellCheck={false}
+                          />
+                        </div>
+                      </td>
+                      <td className="actions">
+                        <button
+                          type="button"
+                          onClick={() => saveCollectionRow(row)}
+                          disabled={submitting}
+                        >
+                          Save
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setCollDeleteTarget({ id: row.id, name: row.name })
+                          }
+                          disabled={submitting}
+                        >
+                          Delete
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </>
         )}
       </section>

@@ -3,8 +3,8 @@ package places
 import "go.mongodb.org/mongo-driver/bson/primitive"
 
 type Geometry struct {
-	Type        string    `bson:"type" json:"type"`
-	Coordinates []float64 `bson:"coordinates" json:"coordinates"`
+	Type        string `bson:"type" json:"type"`
+	Coordinates any    `bson:"coordinates" json:"coordinates"`
 }
 
 type Place struct {

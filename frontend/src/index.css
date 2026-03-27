@@ -219,6 +219,73 @@ body {
   background: #fff;
 }
 
+.place-form select,
+.place-form textarea {
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: #fff;
+}
+
+.place-form-extended {
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  align-items: start;
+}
+
+.place-form-coords {
+  grid-column: 1 / -1;
+  width: 100%;
+  min-height: 88px;
+  resize: vertical;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+}
+
+.map-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.map-legend-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #334155;
+  margin-right: 4px;
+}
+
+.map-legend-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid #cbd5e1;
+  border-radius: 999px;
+  padding: 4px 10px;
+  background: #fff;
+  font-size: 12px;
+  cursor: pointer;
+  color: #0f172a;
+}
+
+.map-legend-chip-off {
+  opacity: 0.45;
+  text-decoration: line-through;
+}
+
+.map-legend-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 1px solid rgba(15, 23, 42, 0.2);
+}
+
+.map-hit-popup {
+  font-size: 13px;
+  line-height: 1.4;
+}
+
 .map-help {
   color: #475569;
   font-size: 13px;
@@ -270,7 +337,59 @@ table {
 }
 
 .table-wrap table {
-  min-width: 680px;
+  min-width: 800px;
+}
+
+.table-row-editing {
+  background: #e0f2fe;
+}
+
+.table-row-editing td {
+  vertical-align: top;
+}
+
+.table-inline-input {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-size: 13px;
+}
+
+.table-inline-input-narrow {
+  min-width: 72px;
+  flex: 1 1 72px;
+}
+
+.table-inline-select {
+  max-width: 100%;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-size: 13px;
+  background: #fff;
+}
+
+.table-inline-ll {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.table-inline-coords {
+  width: 100%;
+  min-width: 180px;
+  max-width: 360px;
+  box-sizing: border-box;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-size: 11px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  resize: vertical;
+  min-height: 56px;
 }
 
 th,
@@ -303,6 +422,95 @@ thead th {
   font-size: 14px;
 }
 
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.collections-panel-head h2 {
+  margin: 0 0 4px;
+}
+
+.collections-intro {
+  margin: 0;
+  font-size: 14px;
+  color: #64748b;
+  max-width: 52ch;
+}
+
+.collections-add-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 16px;
+  padding: 12px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+}
+
+.collections-add-name {
+  flex: 1 1 200px;
+  min-width: 0;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 14px;
+}
+
+.collections-color-picker-wrap input[type="color"] {
+  width: 42px;
+  height: 36px;
+  padding: 2px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  cursor: pointer;
+  background: #fff;
+}
+
+.collections-hex-input {
+  width: 7.5rem;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-family: ui-monospace, monospace;
+  font-size: 13px;
+}
+
+.collections-color-cell {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.collections-color-cell input[type="color"] {
+  width: 40px;
+  height: 32px;
+  padding: 2px;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  cursor: pointer;
+  background: #fff;
+}
+
+.collections-registry-table {
+  min-width: 520px;
+}
+
+.collections-empty {
+  color: #64748b;
+  font-size: 14px;
+}
+
 .map-popup-add {
   min-width: 220px;
   padding: 2px 0;
@@ -322,6 +530,25 @@ thead th {
   padding: 8px 10px;
   font-size: 14px;
   margin-bottom: 10px;
+}
+
+.map-popup-label {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  color: #475569;
+  margin-bottom: 4px;
+}
+
+.map-popup-select {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  padding: 6px 8px;
+  margin-bottom: 10px;
+  background: #fff;
+  font-size: 14px;
 }
 
 .map-popup-actions {
@@ -448,6 +675,10 @@ thead th {
 
   .place-form input[type="text"] {
     grid-column: 1 / -1;
+  }
+
+  .place-form-extended {
+    grid-template-columns: 1fr 1fr;
   }
 }
 
