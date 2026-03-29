@@ -2,6 +2,7 @@ package places
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"regexp"
 	"sort"
@@ -23,7 +24,7 @@ func NewRepository(db *mongo.Database) *Repository {
 	}
 }
 
-func (r *Repository) List(ctx context.Context, page int64, limit int64, nameQuery, collectionQuery string) ([]Place, int64, error) {
+func buildPlacesFilter(nameQuery, collectionQuery string) bson.M {
 	filter := bson.M{}
 	if q := strings.TrimSpace(nameQuery); q != "" {
 		pattern := regexp.QuoteMeta(q)
@@ -36,6 +37,11 @@ func (r *Repository) List(ctx context.Context, page int64, limit int64, nameQuer
 		pattern := regexp.QuoteMeta(c)
 		filter["properties.collection"] = bson.M{"$regex": pattern, "$options": "i"}
 	}
+	return filter
+}
+
+func (r *Repository) List(ctx context.Context, page int64, limit int64, nameQuery, collectionQuery string) ([]Place, int64, error) {
+	filter := buildPlacesFilter(nameQuery, collectionQuery)
 
 	total, err := r.collection.CountDocuments(ctx, filter)
 	if err != nil {
@@ -60,6 +66,26 @@ func (r *Repository) List(ctx context.Context, page int64, limit int64, nameQuer
 	}
 
 	return places, total, nil
+}
+
+// ListAllFiltered returns every place matching the same filters as List (no pagination).
+func (r *Repository) ListAllFiltered(ctx context.Context, nameQuery, collectionQuery string) ([]Place, error) {
+	filter := buildPlacesFilter(nameQuery, collectionQuery)
+	findOptions := options.Find().
+		SetSort(bson.D{{Key: "_id", Value: -1}})
+
+	cur, err := r.collection.Find(ctx, filter, findOptions)
+	if err != nil {
+		return nil, err
+	}
+	defer cur.Close(ctx)
+
+	places := make([]Place, 0)
+	if err := cur.All(ctx, &places); err != nil {
+		return nil, err
+	}
+
+	return places, nil
 }
 
 func (r *Repository) ListAll(ctx context.Context) ([]Place, error) {
@@ -209,4 +235,80 @@ func (r *Repository) DistinctCollections(ctx context.Context) ([]string, error) 
 	}
 	sort.Strings(out)
 	return out, nil
+}
+
+var defaultRegistryColors = []string{
+	"#2563eb", "#16a34a", "#d97706", "#9333ea", "#e11d48", "#0891b2", "#ca8a04", "#4f46e5",
+}
+
+// EnsureRegistryCollectionNames inserts missing rows into place_collections for each name
+// (default color palette cycles by sorted name index).
+func (r *Repository) EnsureRegistryCollectionNames(ctx context.Context, names []string) error {
+	seen := make(map[string]struct{})
+	uniq := make([]string, 0)
+	for _, n := range names {
+		n = strings.TrimSpace(n)
+		if n == "" {
+			continue
+		}
+		if _, ok := seen[n]; ok {
+			continue
+		}
+		seen[n] = struct{}{}
+		uniq = append(uniq, n)
+	}
+	if len(uniq) == 0 {
+		return nil
+	}
+	sort.Strings(uniq)
+
+	reg := r.collection.Database().Collection("place_collections")
+	for i, name := range uniq {
+		var existing bson.M
+		err := reg.FindOne(ctx, bson.M{"name": name}).Decode(&existing)
+		if err == nil {
+			continue
+		}
+		if !errors.Is(err, mongo.ErrNoDocuments) {
+			return err
+		}
+		color := defaultRegistryColors[i%len(defaultRegistryColors)]
+		_, err = reg.InsertOne(ctx, bson.M{"name": name, "color": color})
+		if err != nil {
+			if mongo.IsDuplicateKeyError(err) {
+				continue
+			}
+			return err
+		}
+	}
+	return nil
+}
+
+// EnsureRegistryCollectionsFromPlaces inserts missing registry rows for properties.collection
+// on the given places.
+func (r *Repository) EnsureRegistryCollectionsFromPlaces(ctx context.Context, places []Place) error {
+	seen := make(map[string]struct{})
+	names := make([]string, 0)
+	for _, p := range places {
+		c := propertyCollection(p.Properties)
+		if c == "" {
+			continue
+		}
+		if _, ok := seen[c]; ok {
+			continue
+		}
+		seen[c] = struct{}{}
+		names = append(names, c)
+	}
+	return r.EnsureRegistryCollectionNames(ctx, names)
+}
+
+// SyncRegistryFromDistinctPlaceCollections adds registry entries for every distinct
+// non-empty properties.collection currently stored on places.
+func (r *Repository) SyncRegistryFromDistinctPlaceCollections(ctx context.Context) error {
+	names, err := r.DistinctCollections(ctx)
+	if err != nil {
+		return err
+	}
+	return r.EnsureRegistryCollectionNames(ctx, names)
 }

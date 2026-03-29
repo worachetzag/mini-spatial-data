@@ -103,6 +103,44 @@ function combineLayerFilter(geomFilter, hiddenFilter) {
   return ["all", geomFilter, hiddenFilter];
 }
 
+const mapPlaceNameTextField = [
+  "case",
+  ["has", "name"],
+  ["to-string", ["get", "name"]],
+  "Unnamed place"
+];
+
+const mapPlaceLabelPaint = {
+  "text-color": "#0f172a",
+  "text-halo-color": "rgba(255,255,255,0.98)",
+  "text-halo-width": 4,
+  "text-halo-blur": 1.1
+};
+
+const mapLineWidthByZoom = [
+  "interpolate",
+  ["linear"],
+  ["zoom"],
+  5,
+  3,
+  10,
+  5.5,
+  14,
+  8
+];
+
+const mapLineCasingWidthByZoom = [
+  "interpolate",
+  ["linear"],
+  ["zoom"],
+  5,
+  8,
+  10,
+  12,
+  14,
+  16
+];
+
 function nearestPointPlace(lng, lat, places) {
   let nearest = null;
   for (const place of places) {
@@ -187,6 +225,7 @@ function App() {
   const [filterInput, setFilterInput] = useState("");
   const [appliedFilter, setAppliedFilter] = useState("");
   const [managedCollections, setManagedCollections] = useState([]);
+  const [mapPlaces, setMapPlaces] = useState([]);
   const [registryDraft, setRegistryDraft] = useState([]);
   const [newCollectionName, setNewCollectionName] = useState("");
   const [newCollectionColor, setNewCollectionColor] = useState("#2563eb");
@@ -200,10 +239,10 @@ function App() {
   const draftMarkerRef = React.useRef(null);
   const clickPopupRef = React.useRef(null);
   const selectionPopupRef = React.useRef(null);
-  const placesRef = React.useRef(places);
+  const mapPlacesRef = React.useRef(mapPlaces);
   const createPlaceFromMapRef = React.useRef(async () => {});
 
-  placesRef.current = places;
+  mapPlacesRef.current = mapPlaces;
 
   const apiUrl = useMemo(
     () => (API_BASE_URL ? `${API_BASE_URL}/api/places` : ""),
@@ -231,7 +270,7 @@ function App() {
     managedCollections.forEach((c) => {
       s.add(String(c.name ?? "").trim());
     });
-    places.forEach((p) => {
+    mapPlaces.forEach((p) => {
       s.add(String(p?.properties?.collection ?? "").trim());
     });
     return Array.from(s).sort((a, b) => {
@@ -239,7 +278,7 @@ function App() {
       if (b === "") return 1;
       return a.localeCompare(b);
     });
-  }, [managedCollections, places]);
+  }, [managedCollections, mapPlaces]);
 
   const mapCollectionColorByName = useMemo(() => {
     const m = {};
@@ -262,7 +301,30 @@ function App() {
     }, 2500);
   }
 
-  async function loadPlaces(targetPage = currentPage, filterOverride, collectionOverride) {
+  async function loadMapPlacesForQuery(q) {
+    if (!API_BASE_URL) return;
+    try {
+      const params = new URLSearchParams();
+      if (String(q ?? "").trim()) {
+        params.set("q", String(q).trim());
+      }
+      const qs = params.toString();
+      const url = qs
+        ? `${API_BASE_URL}/api/places/map?${qs}`
+        : `${API_BASE_URL}/api/places/map`;
+      const response = await fetch(url);
+      if (!response.ok) return;
+      const json = await response.json();
+      if (Array.isArray(json.data)) {
+        setMapPlaces(json.data);
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+
+  async function loadPlaces(targetPage = currentPage, filterOverride, opts = {}) {
+    const skipMapRefresh = opts.skipMapRefresh === true;
     const q = filterOverride !== undefined ? filterOverride : appliedFilter;
     setLoading(true);
     setError("");
@@ -292,7 +354,7 @@ function App() {
       const serverPage = Number(json.page ?? targetPage);
 
       if (computedTotalPages > 0 && serverPage > computedTotalPages) {
-        await loadPlaces(computedTotalPages, q);
+        await loadPlaces(computedTotalPages, q, opts);
         return;
       }
 
@@ -300,6 +362,9 @@ function App() {
       setCurrentPage(serverPage);
       setTotalRecords(nextTotal);
       setTotalPages(Number(json.totalPages ?? computedTotalPages));
+      if (!skipMapRefresh) {
+        void loadMapPlacesForQuery(q);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unknown error");
     } finally {
@@ -675,6 +740,31 @@ function App() {
     }
   }
 
+  async function syncCollectionsFromPlaces() {
+    if (!API_BASE_URL) {
+      showToast("Missing VITE_API_BASE_URL", "error");
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/collections/sync-from-places`, {
+        method: "POST"
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        throw new Error(payload.error || `Sync failed: ${response.status}`);
+      }
+      showToast("Collections synced from places", "success");
+      await fetchManagedCollections();
+      await loadPlaces(currentPage);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Unknown error";
+      showToast(msg, "error");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
   useEffect(() => {
     fetchManagedCollections();
   }, [registryCollectionsUrl]);
@@ -802,7 +892,7 @@ function App() {
         coordsJson: ""
       });
     }
-    loadPlaces(nextPage);
+    loadPlaces(nextPage, undefined, { skipMapRefresh: true });
   }
 
   function applyNameFilter() {
@@ -885,7 +975,7 @@ function App() {
     if (!mapContainerRef.current) return;
     if (mapRef.current) return;
 
-    const points = extractPointCoordinates(placesRef.current);
+    const points = extractPointCoordinates(mapPlacesRef.current);
     const initialCenter = points.length > 0 ? points[0] : [100.5018, 13.7563];
     const initialZoom = points.length > 0 ? 10 : 5;
 
@@ -917,7 +1007,7 @@ function App() {
       const lng = Number(event.lngLat.lng.toFixed(6));
       const lat = Number(event.lngLat.lat.toFixed(6));
 
-      const nearest = nearestPointPlace(lng, lat, placesRef.current);
+      const nearest = nearestPointPlace(lng, lat, mapPlacesRef.current);
       const isExactExistingPoint = nearest && nearest.meters <= 8;
       if (clickPopupRef.current) {
         clickPopupRef.current.remove();
@@ -1051,8 +1141,20 @@ function App() {
         filter: ["==", ["geometry-type"], "Polygon"],
         paint: {
           "fill-color": "#64748b",
-          "fill-opacity": 0.38,
+          "fill-opacity": 0.68,
           "fill-outline-color": "#0f172a"
+        }
+      });
+      map.addLayer({
+        id: "places-line-casing",
+        type: "line",
+        source: "places",
+        filter: ["==", ["geometry-type"], "LineString"],
+        layout: { "line-cap": "round", "line-join": "round" },
+        paint: {
+          "line-color": "#ffffff",
+          "line-width": mapLineCasingWidthByZoom,
+          "line-opacity": 0.95
         }
       });
       map.addLayer({
@@ -1063,7 +1165,7 @@ function App() {
         layout: { "line-cap": "round", "line-join": "round" },
         paint: {
           "line-color": "#64748b",
-          "line-width": 3
+          "line-width": mapLineWidthByZoom
         }
       });
       map.addLayer({
@@ -1079,17 +1181,54 @@ function App() {
         }
       });
       map.addLayer({
+        id: "places-poly-label",
+        type: "symbol",
+        source: "places",
+        filter: ["==", ["geometry-type"], "Polygon"],
+        layout: {
+          "symbol-placement": "line-center",
+          "text-field": mapPlaceNameTextField,
+          "text-font": ["Noto Sans Regular", "Arial Unicode MS Regular"],
+          "text-size": 12,
+          "text-padding": 4,
+          "text-rotation-alignment": "viewport",
+          "text-pitch-alignment": "viewport",
+          "text-allow-overlap": true,
+          "text-ignore-placement": true,
+          "text-optional": false,
+          "symbol-avoid-edges": false,
+          "symbol-z-order": "source"
+        },
+        paint: mapPlaceLabelPaint
+      });
+      map.addLayer({
+        id: "places-line-label",
+        type: "symbol",
+        source: "places",
+        filter: ["==", ["geometry-type"], "LineString"],
+        layout: {
+          "symbol-placement": "line-center",
+          "text-field": mapPlaceNameTextField,
+          "text-font": ["Noto Sans Regular", "Arial Unicode MS Regular"],
+          "text-size": 12,
+          "text-padding": 4,
+          "text-rotation-alignment": "viewport",
+          "text-pitch-alignment": "viewport",
+          "text-allow-overlap": true,
+          "text-ignore-placement": true,
+          "text-optional": false,
+          "symbol-avoid-edges": false,
+          "symbol-z-order": "source"
+        },
+        paint: mapPlaceLabelPaint
+      });
+      map.addLayer({
         id: "places-point-label",
         type: "symbol",
         source: "places",
         filter: ["==", ["geometry-type"], "Point"],
         layout: {
-          "text-field": [
-            "case",
-            ["has", "name"],
-            ["to-string", ["get", "name"]],
-            "Unnamed place"
-          ],
+          "text-field": mapPlaceNameTextField,
           "text-font": ["Noto Sans Regular", "Arial Unicode MS Regular"],
           "text-offset": [0, 1.35],
           "text-anchor": "top",
@@ -1099,12 +1238,7 @@ function App() {
           "text-ignore-placement": true,
           "symbol-z-order": "source"
         },
-        paint: {
-          "text-color": "#0f172a",
-          "text-halo-color": "rgba(255,255,255,0.98)",
-          "text-halo-width": 4,
-          "text-halo-blur": 1.1
-        }
+        paint: mapPlaceLabelPaint
       });
       map.on("click", handleMapClick);
       if (!cancelled) {
@@ -1137,15 +1271,7 @@ function App() {
     };
   }, [viewMode]);
 
-  useEffect(() => {
-    if (viewMode !== "map" || !mapStyleReady || !mapRef.current) return;
-    const map = mapRef.current;
-    const src = map.getSource("places");
-    if (!src || typeof src.setData !== "function") return;
-
-    const fc = placesToFeatureCollection(places);
-    src.setData(fc);
-
+  function syncMapPlaceLayers(map) {
     const colorExpr = buildColorMatchFromRegistry(managedCollections);
     const hiddenFilter = buildHiddenCollectionFilter(hiddenMapCollections);
     const fPoly = combineLayerFilter(["==", ["geometry-type"], "Polygon"], hiddenFilter);
@@ -1153,15 +1279,29 @@ function App() {
     const fPoint = combineLayerFilter(["==", ["geometry-type"], "Point"], hiddenFilter);
 
     map.setFilter("places-poly-fill", fPoly);
+    map.setFilter("places-line-casing", fLine);
     map.setFilter("places-line", fLine);
     map.setFilter("places-point", fPoint);
+    map.setFilter("places-poly-label", fPoly);
+    map.setFilter("places-line-label", fLine);
     map.setFilter("places-point-label", fPoint);
 
     map.setPaintProperty("places-poly-fill", "fill-color", colorExpr);
     map.setPaintProperty("places-line", "line-color", colorExpr);
     map.setPaintProperty("places-point", "circle-color", colorExpr);
+  }
 
-    const b = boundsFromPlaces(places);
+  useEffect(() => {
+    if (viewMode !== "map" || !mapStyleReady || !mapRef.current) return;
+    const map = mapRef.current;
+    const src = map.getSource("places");
+    if (!src || typeof src.setData !== "function") return;
+
+    const fc = placesToFeatureCollection(mapPlaces);
+    src.setData(fc);
+    syncMapPlaceLayers(map);
+
+    const b = boundsFromPlaces(mapPlaces);
     if (b) {
       const sw = b.getSouthWest();
       const ne = b.getNorthEast();
@@ -1172,11 +1312,20 @@ function App() {
         map.fitBounds(b, { padding: 60, maxZoom: 14 });
       }
     }
-  }, [places, viewMode, mapStyleReady, hiddenMapCollections, managedCollections]);
+  }, [mapPlaces, viewMode, mapStyleReady]);
+
+  useEffect(() => {
+    if (viewMode !== "map" || !mapStyleReady || !mapRef.current) return;
+    const map = mapRef.current;
+    if (!map.getSource("places")) return;
+    syncMapPlaceLayers(map);
+  }, [hiddenMapCollections, managedCollections, viewMode, mapStyleReady]);
 
   useEffect(() => {
     if (viewMode !== "map" || !mapStyleReady || !selectedPlaceId || !mapRef.current) return;
-    const target = places.find((place) => place.id === selectedPlaceId);
+    const target =
+      mapPlaces.find((place) => place.id === selectedPlaceId) ||
+      places.find((place) => place.id === selectedPlaceId);
     if (!target?.geometry) return;
 
     const map = mapRef.current;
@@ -1209,7 +1358,7 @@ function App() {
       )
       .addTo(map);
     selectionPopupRef.current = popup;
-  }, [places, selectedPlaceId, viewMode, mapStyleReady]);
+  }, [mapPlaces, places, selectedPlaceId, viewMode, mapStyleReady]);
 
   return (
     <main className="page">
@@ -1637,8 +1786,9 @@ function App() {
         {viewMode === "map" && (
           <>
             <p className="map-view-hint">
-              Polygons (filled) and lines use colors by collection. Points: click empty map to add. Toggle
-              layers in the legend.
+              The map shows all places matching your search (not just the current table page). Polygons
+              (filled) and lines use colors by collection. Points: click empty map to add. Toggle layers in
+              the legend.
             </p>
             <div className="map-legend">
               <span className="map-legend-title">Collections</span>
@@ -1671,7 +1821,8 @@ function App() {
               <div>
                 <h2>Collections</h2>
                 <p className="collections-intro">
-                  Add, edit, or delete categories and pick map colors. Places link by exact name match.
+                  Add, edit, or delete categories and pick map colors. Places link by exact name match. After
+                  import, use Sync from places to register collection names that appear only on places.
                 </p>
               </div>
             </div>
@@ -1710,6 +1861,15 @@ function App() {
               >
                 Add collection
               </button>
+              <button
+                type="button"
+                className="collections-sync-btn"
+                onClick={syncCollectionsFromPlaces}
+                disabled={submitting}
+                title="Create registry rows for every distinct properties.collection on places"
+              >
+                Sync from places
+              </button>
             </div>
             <div className="table-wrap">
               <table className="collections-registry-table">
@@ -1724,7 +1884,8 @@ function App() {
                   {registryDraft.length === 0 && (
                     <tr>
                       <td colSpan={3} className="collections-empty">
-                        No collections yet — add one above.
+                        No collections yet — add one above, or Sync from places if imports already set
+                        collection names.
                       </td>
                     </tr>
                   )}

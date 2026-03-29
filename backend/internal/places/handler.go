@@ -98,6 +98,27 @@ func (h *Handler) List(c echo.Context) error {
 	})
 }
 
+// MapList returns all places matching the list filters (same q/collection as GET /api/places), without pagination, for map rendering.
+func (h *Handler) MapList(c echo.Context) error {
+	nameQuery := strings.TrimSpace(c.QueryParam("q"))
+	collectionQuery := strings.TrimSpace(c.QueryParam("collection"))
+
+	ctx, cancel := context.WithTimeout(c.Request().Context(), 60*time.Second)
+	defer cancel()
+
+	places, err := h.repo.ListAllFiltered(ctx, nameQuery, collectionQuery)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{
+			"error": "failed to load places for map",
+		})
+	}
+
+	return c.JSON(http.StatusOK, map[string]any{
+		"count": len(places),
+		"data":  places,
+	})
+}
+
 func (h *Handler) Collections(c echo.Context) error {
 	ctx, cancel := context.WithTimeout(c.Request().Context(), 5*time.Second)
 	defer cancel()
@@ -266,6 +287,10 @@ func (h *Handler) Import(c echo.Context) error {
 		})
 	}
 
+	if err := h.repo.EnsureRegistryCollectionsFromPlaces(ctx, places); err != nil {
+		c.Logger().Warnf("import: ensure registry collections: %v", err)
+	}
+
 	return c.JSON(http.StatusOK, map[string]any{
 		"message":  "import completed",
 		"inserted": inserted,
@@ -312,6 +337,10 @@ func (h *Handler) Create(c echo.Context) error {
 		})
 	}
 	input.ID = id
+
+	if err := h.repo.EnsureRegistryCollectionsFromPlaces(ctx, []Place{input}); err != nil {
+		c.Logger().Warnf("create: ensure registry collections: %v", err)
+	}
 
 	return c.JSON(http.StatusCreated, input)
 }
@@ -444,6 +473,10 @@ func (h *Handler) UpdateByID(c echo.Context) error {
 		return c.JSON(http.StatusInternalServerError, map[string]string{
 			"error": "updated but failed to reload place",
 		})
+	}
+
+	if err := h.repo.EnsureRegistryCollectionsFromPlaces(ctx, []Place{*place}); err != nil {
+		c.Logger().Warnf("update: ensure registry collections: %v", err)
 	}
 
 	return c.JSON(http.StatusOK, place)

@@ -89,11 +89,13 @@ func main() {
 		})
 	})
 	e.GET("/api/collections", collHandler.List)
+	e.POST("/api/collections/sync-from-places", collHandler.SyncFromPlaces)
 	e.POST("/api/collections", collHandler.Create)
 	e.PATCH("/api/collections/:id", collHandler.Update)
 	e.DELETE("/api/collections/:id", collHandler.Delete)
 
 	e.GET("/api/places", placeHandler.List)
+	e.GET("/api/places/map", placeHandler.MapList)
 	e.GET("/api/places/collections", placeHandler.Collections)
 	e.GET("/api/places/export", placeHandler.Export)
 	e.POST("/api/places/import", placeHandler.Import)

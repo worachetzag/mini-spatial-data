@@ -457,6 +457,26 @@ thead th {
   border-radius: 8px;
 }
 
+.collections-sync-btn {
+  margin-left: auto;
+  padding: 8px 14px;
+  font-size: 14px;
+  border-radius: 8px;
+  border: 1px solid #cbd5e1;
+  background: #fff;
+  color: #334155;
+  cursor: pointer;
+}
+
+.collections-sync-btn:hover:not(:disabled) {
+  background: #f1f5f9;
+}
+
+.collections-sync-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 .collections-add-name {
   flex: 1 1 200px;
   min-width: 0;

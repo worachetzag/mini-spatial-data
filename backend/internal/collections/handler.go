@@ -50,6 +50,21 @@ func normalizeColor(raw string) string {
 	return strings.ToLower(s)
 }
 
+func (h *Handler) SyncFromPlaces(c echo.Context) error {
+	ctx, cancel := context.WithTimeout(c.Request().Context(), 20*time.Second)
+	defer cancel()
+
+	if err := h.placesRepo.SyncRegistryFromDistinctPlaceCollections(ctx); err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{
+			"error": "failed to sync collections from places",
+		})
+	}
+
+	return c.JSON(http.StatusOK, map[string]string{
+		"message": "registry updated from distinct place collections",
+	})
+}
+
 func (h *Handler) List(c echo.Context) error {
 	ctx, cancel := context.WithTimeout(c.Request().Context(), 5*time.Second)
 	defer cancel()
