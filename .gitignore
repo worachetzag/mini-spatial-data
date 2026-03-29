@@ -26,6 +26,3 @@ backend/app
 backend/*.exe
 backend/*.out
 backend/*.test
-
-# local API collections
-postman/

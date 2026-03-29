@@ -1,0 +1,295 @@
+{
+  "info": {
+    "_postman_id": "3a63873a-0f8e-4f40-b2e2-e4af5f167da9",
+    "name": "Mini Spatial Data API",
+    "description": "Places (GeoJSON), collections registry, import/export, map list, bulk delete.\n\nVariables: `baseUrl` (e.g. http://localhost:8080), `placeId` and `collectionId` are set by Create request tests when present.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Health",
+      "item": [
+        {
+          "name": "Health",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/health"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Collections",
+      "item": [
+        {
+          "name": "List Collections",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/collections"
+          }
+        },
+        {
+          "name": "Sync Collections From Places",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": "{{baseUrl}}/api/collections/sync-from-places",
+            "description": "Creates missing `place_collections` rows for every distinct `properties.collection` on places."
+          }
+        },
+        {
+          "name": "Create Collection",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 201', function () { pm.response.to.have.status(201); });",
+                  "const json = pm.response.json();",
+                  "if (json && json.id) { pm.collectionVariables.set('collectionId', json.id); }"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Sample Area\",\n  \"color\": \"#2563eb\"\n}"
+            },
+            "url": "{{baseUrl}}/api/collections"
+          }
+        },
+        {
+          "name": "Update Collection",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Sample Area (updated)\",\n  \"color\": \"#059669\"\n}"
+            },
+            "url": "{{baseUrl}}/api/collections/{{collectionId}}"
+          }
+        },
+        {
+          "name": "Delete Collection",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": "{{baseUrl}}/api/collections/{{collectionId}}"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Places",
+      "item": [
+        {
+          "name": "List Places (paginated)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/places?page=1&limit=10",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "places"],
+              "query": [
+                { "key": "page", "value": "1" },
+                { "key": "limit", "value": "10" },
+                { "key": "q", "value": "", "disabled": true, "description": "Search name or collection (regex, case-insensitive)" },
+                { "key": "collection", "value": "", "disabled": true, "description": "Filter by properties.collection" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "List Places For Map (no pagination)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/places/map",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "places", "map"],
+              "query": [
+                { "key": "q", "value": "", "disabled": true },
+                { "key": "collection", "value": "", "disabled": true }
+              ]
+            },
+            "description": "Returns all matching places for map UI; same `q` / `collection` filters as list."
+          }
+        },
+        {
+          "name": "Distinct Place Collection Names",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/places/collections"
+          }
+        },
+        {
+          "name": "Export Places (CSV)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/places/export?format=csv",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "places", "export"],
+              "query": [
+                { "key": "format", "value": "csv" },
+                { "key": "ids", "value": "", "disabled": true, "description": "Comma-separated place ObjectIds; omit for all" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Export Places (XLSX)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/places/export?format=xlsx",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "places", "export"],
+              "query": [{ "key": "format", "value": "xlsx" }]
+            }
+          }
+        },
+        {
+          "name": "Import Places",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "file",
+                  "description": "CSV or XLSX",
+                  "type": "file",
+                  "src": []
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/places/import?format=csv",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "places", "import"],
+              "query": [{ "key": "format", "value": "csv", "description": "csv or xlsx" }]
+            }
+          }
+        },
+        {
+          "name": "Bulk Delete Places",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"ids\": [\"{{placeId}}\"]\n}"
+            },
+            "url": "{{baseUrl}}/api/places/bulk-delete"
+          }
+        },
+        {
+          "name": "Create Place",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 201', function () { pm.response.to.have.status(201); });",
+                  "const json = pm.response.json();",
+                  "if (json && json.id) { pm.collectionVariables.set('placeId', json.id); }"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"type\": \"Feature\",\n  \"geometry\": {\n    \"type\": \"Point\",\n    \"coordinates\": [100.5018, 13.7563]\n  },\n  \"properties\": {\n    \"name\": \"Bangkok sample\",\n    \"collection\": \"Demo\"\n  }\n}"
+            },
+            "url": "{{baseUrl}}/api/places"
+          }
+        },
+        {
+          "name": "Get Place By ID",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/places/{{placeId}}"
+          }
+        },
+        {
+          "name": "Update Place By ID",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"properties\": {\n    \"name\": \"Bangkok sample (updated)\",\n    \"collection\": \"Demo\"\n  },\n  \"geometry\": {\n    \"type\": \"Point\",\n    \"coordinates\": [100.502, 13.757]\n  }\n}"
+            },
+            "url": "{{baseUrl}}/api/places/{{placeId}}"
+          }
+        },
+        {
+          "name": "Delete Place By ID",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": "{{baseUrl}}/api/places/{{placeId}}"
+          }
+        }
+      ]
+    }
+  ],
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:8080"
+    },
+    {
+      "key": "placeId",
+      "value": ""
+    },
+    {
+      "key": "collectionId",
+      "value": ""
+    }
+  ]
+}
