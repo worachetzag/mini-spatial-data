@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import maplibregl from "maplibre-gl";
+import { useI18n } from "./i18n/I18nContext.jsx";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
 const DEFAULT_MAP_STYLE =
@@ -198,6 +199,10 @@ function toastId() {
 }
 
 function App() {
+  const { t, lang, setLang } = useI18n();
+  const tRef = React.useRef(t);
+  tRef.current = t;
+
   const [places, setPlaces] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -330,7 +335,7 @@ function App() {
     setError("");
     if (!apiUrl) {
       setLoading(false);
-      setError("Missing VITE_API_BASE_URL");
+      setError(t("toast.missingApi"));
       return;
     }
     try {
@@ -374,8 +379,8 @@ function App() {
 
   async function handleExport(format) {
     if (!exportUrl) {
-      setError("Missing VITE_API_BASE_URL");
-      showToast("Missing VITE_API_BASE_URL", "error");
+      setError(t("toast.missingApi"));
+      showToast(t("toast.missingApi"), "error");
       return;
     }
     try {
@@ -396,8 +401,9 @@ function App() {
       anchor.click();
       anchor.remove();
       window.URL.revokeObjectURL(url);
-      const target = selectedIds.length > 0 ? "selected records" : "all records";
-      showToast(`Exported ${format.toUpperCase()} (${target})`, "success");
+      const target =
+        selectedIds.length > 0 ? t("toast.exportSelected") : t("toast.exportAll");
+      showToast(t("toast.exported", { format: format.toUpperCase(), target }), "success");
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Unknown error";
       setError(msg);
@@ -407,12 +413,12 @@ function App() {
 
   async function deleteSelected() {
     if (!bulkDeleteUrl) {
-      setError("Missing VITE_API_BASE_URL");
-      showToast("Missing VITE_API_BASE_URL", "error");
+      setError(t("toast.missingApi"));
+      showToast(t("toast.missingApi"), "error");
       return;
     }
     if (selectedIds.length === 0) {
-      showToast("Please select at least one record", "info");
+      showToast(t("toast.pickRecords"), "info");
       return;
     }
 
@@ -429,7 +435,7 @@ function App() {
       }
       const payload = await response.json();
       const deleted = Number(payload.deleted || 0);
-      showToast(`Deleted ${deleted} selected record(s)`, "success");
+      showToast(t("toast.deletedN", { n: deleted }), "success");
       setSelectedIds([]);
       await fetchManagedCollections();
       await loadPlaces(currentPage);
@@ -471,12 +477,12 @@ function App() {
 
   async function handleImport() {
     if (!importUrl) {
-      setError("Missing VITE_API_BASE_URL");
-      showToast("Missing VITE_API_BASE_URL", "error");
+      setError(t("toast.missingApi"));
+      showToast(t("toast.missingApi"), "error");
       return;
     }
     if (!importFile) {
-      showToast("Please choose CSV or XLSX file", "error");
+      showToast(t("toast.pickFile"), "error");
       return;
     }
 
@@ -503,7 +509,7 @@ function App() {
       }
       const payload = await response.json();
       const inserted = Number(payload.inserted || 0);
-      showToast(`Imported ${inserted} records`, "success");
+      showToast(t("toast.importedN", { n: inserted }), "success");
       setImportFile(null);
       await fetchManagedCollections();
       await loadPlaces(1);
@@ -521,13 +527,13 @@ function App() {
       event.preventDefault();
     }
     if (!apiUrl) {
-      setError("Missing VITE_API_BASE_URL");
-      showToast("Missing VITE_API_BASE_URL", "error");
+      setError(t("toast.missingApi"));
+      showToast(t("toast.missingApi"), "error");
       return;
     }
     if (!form.name.trim()) {
-      setError("Please provide a place name");
-      showToast("Please provide a place name", "error");
+      setError(t("toast.nameRequired"));
+      showToast(t("toast.nameRequired"), "error");
       return;
     }
 
@@ -536,8 +542,8 @@ function App() {
       const lng = Number(form.lng);
       const lat = Number(form.lat);
       if (Number.isNaN(lng) || Number.isNaN(lat)) {
-        setError("Please provide valid longitude and latitude");
-        showToast("Please provide valid longitude and latitude", "error");
+        setError(t("toast.lngLatInvalid"));
+        showToast(t("toast.lngLatInvalid"), "error");
         return;
       }
       geometry = { type: "Point", coordinates: [lng, lat] };
@@ -546,8 +552,8 @@ function App() {
       try {
         parsed = JSON.parse(form.coordsJson.trim());
       } catch {
-        setError("Coordinates JSON is invalid");
-        showToast("Coordinates JSON is invalid", "error");
+        setError(t("toast.coordsInvalid"));
+        showToast(t("toast.coordsInvalid"), "error");
         return;
       }
       geometry = { type: form.geometryType, coordinates: parsed };
@@ -599,7 +605,7 @@ function App() {
         clickPopupRef.current.remove();
         clickPopupRef.current = null;
       }
-      showToast(isEdit ? "Place updated" : "Place created", "success");
+      showToast(isEdit ? t("toast.placeUpdated") : t("toast.placeCreated"), "success");
       await fetchManagedCollections();
       if (isEdit) {
         await loadPlaces(currentPage);
@@ -665,8 +671,8 @@ function App() {
 
   async function deletePlace(placeId) {
     if (!apiUrl) {
-      setError("Missing VITE_API_BASE_URL");
-      showToast("Missing VITE_API_BASE_URL", "error");
+      setError(t("toast.missingApi"));
+      showToast(t("toast.missingApi"), "error");
       return;
     }
     setSubmitting(true);
@@ -679,7 +685,7 @@ function App() {
       if (editingId === placeId) {
         cancelEdit();
       }
-      showToast("Place deleted", "success");
+      showToast(t("toast.placeDeleted"), "success");
       await fetchManagedCollections();
       await loadPlaces(currentPage);
     } catch (err) {
@@ -699,14 +705,19 @@ function App() {
 
   function cancelDelete() {
     setDeleteTarget(null);
-    showToast("Delete cancelled", "info");
+    showToast(t("toast.deleteCancelled"), "info");
   }
 
   function showOnMap(place) {
     if (!place?.id) return;
     setSelectedPlaceId(place.id);
     setViewMode("map");
-    showToast(`Showing ${place?.properties?.name || "place"} on map`, "info");
+    showToast(
+      t("toast.showOnMap", {
+        name: place?.properties?.name || t("toast.genericPlace")
+      }),
+      "info"
+    );
   }
 
   function changeViewMode(mode) {
@@ -742,7 +753,7 @@ function App() {
 
   async function syncCollectionsFromPlaces() {
     if (!API_BASE_URL) {
-      showToast("Missing VITE_API_BASE_URL", "error");
+      showToast(t("toast.missingApi"), "error");
       return;
     }
     setSubmitting(true);
@@ -754,7 +765,7 @@ function App() {
         const payload = await response.json().catch(() => ({}));
         throw new Error(payload.error || `Sync failed: ${response.status}`);
       }
-      showToast("Collections synced from places", "success");
+      showToast(t("toast.collectionsSynced"), "success");
       await fetchManagedCollections();
       await loadPlaces(currentPage);
     } catch (err) {
@@ -775,17 +786,17 @@ function App() {
 
   async function saveCollectionRow(row) {
     if (!registryCollectionsUrl) {
-      showToast("Missing VITE_API_BASE_URL", "error");
+      showToast(t("toast.missingApi"), "error");
       return;
     }
     const name = String(row.name ?? "").trim();
     const color = normalizeHexColor(row.color);
     if (!name) {
-      showToast("Collection name is required", "error");
+      showToast(t("toast.collNameRequired"), "error");
       return;
     }
     if (!color) {
-      showToast("Color must be #RRGGBB hex", "error");
+      showToast(t("toast.colorHex"), "error");
       return;
     }
     setSubmitting(true);
@@ -799,7 +810,7 @@ function App() {
         const payload = await response.json().catch(() => ({}));
         throw new Error(payload.error || `Save failed: ${response.status}`);
       }
-      showToast("Collection saved", "success");
+      showToast(t("toast.collSaved"), "success");
       await fetchManagedCollections();
       await loadPlaces(currentPage);
     } catch (err) {
@@ -812,17 +823,17 @@ function App() {
 
   async function handleAddManagedCollection() {
     if (!registryCollectionsUrl) {
-      showToast("Missing VITE_API_BASE_URL", "error");
+      showToast(t("toast.missingApi"), "error");
       return;
     }
     const name = newCollectionName.trim();
     const color = normalizeHexColor(newCollectionColor);
     if (!name) {
-      showToast("Collection name is required", "error");
+      showToast(t("toast.collNameRequired"), "error");
       return;
     }
     if (!color) {
-      showToast("Color must be #RRGGBB hex", "error");
+      showToast(t("toast.colorHex"), "error");
       return;
     }
     setSubmitting(true);
@@ -838,7 +849,7 @@ function App() {
       }
       setNewCollectionName("");
       setNewCollectionColor("#2563eb");
-      showToast("Collection created", "success");
+      showToast(t("toast.collCreated"), "success");
       await fetchManagedCollections();
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Unknown error";
@@ -859,7 +870,7 @@ function App() {
         const payload = await response.json().catch(() => ({}));
         throw new Error(payload.error || `Delete failed: ${response.status}`);
       }
-      showToast("Collection deleted; places were unassigned", "success");
+      showToast(t("toast.collDeleted"), "success");
       setCollDeleteTarget(null);
       await fetchManagedCollections();
       await loadPlaces(currentPage);
@@ -928,12 +939,12 @@ function App() {
 
   createPlaceFromMapRef.current = async (lng, lat, name, collection = "") => {
     if (!apiUrl) {
-      showToast("Missing VITE_API_BASE_URL", "error");
+      showToast(t("toast.missingApi"), "error");
       return false;
     }
     const trimmed = name.trim();
     if (!trimmed) {
-      showToast("Please enter a place name", "error");
+      showToast(t("toast.enterName"), "error");
       return false;
     }
     const props = { name: trimmed };
@@ -956,7 +967,7 @@ function App() {
       if (!response.ok) {
         throw new Error(`Save failed: ${response.status}`);
       }
-      showToast("Place created", "success");
+      showToast(t("toast.placeCreated"), "success");
       await fetchManagedCollections();
       await loadPlaces(1);
       return true;
@@ -989,12 +1000,15 @@ function App() {
     let cancelled = false;
 
     const handleMapClick = (event) => {
+      const tt = tRef.current;
       const layersHit = ["places-poly-fill", "places-line", "places-point"];
       const picked = map.queryRenderedFeatures(event.point, { layers: layersHit });
       if (picked.length > 0) {
         const props = picked[0].properties || {};
-        const title = props.name || "Place";
-        const coll = props.collection ? String(props.collection) : "Uncategorized";
+        const title = props.name || tt("map.defaultName");
+        const coll = props.collection
+          ? String(props.collection)
+          : tt("map.uncategorized");
         new maplibregl.Popup({ offset: 12, closeButton: true })
           .setLngLat(event.lngLat)
           .setHTML(
@@ -1018,7 +1032,7 @@ function App() {
           draftMarkerRef.current.remove();
           draftMarkerRef.current = null;
         }
-        showToast("Clicked existing place", "info");
+        showToast(tt("toast.clickExisting"), "info");
         return;
       }
 
@@ -1036,22 +1050,22 @@ function App() {
 
       const coordsLine = document.createElement("p");
       coordsLine.className = "map-popup-coords";
-      coordsLine.textContent = `lat ${lat}, lon ${lng}`;
+      coordsLine.textContent = tt("map.coordsLine", { lat, lng });
 
       const input = document.createElement("input");
       input.type = "text";
       input.className = "map-popup-input";
-      input.placeholder = "Place name";
+      input.placeholder = tt("form.placeName");
       input.setAttribute("autocomplete", "off");
 
       const collLabel = document.createElement("label");
       collLabel.className = "map-popup-label";
-      collLabel.textContent = "Collection";
+      collLabel.textContent = tt("map.popup.collection");
       const collInput = document.createElement("select");
       collInput.className = "map-popup-select";
       const optEmpty = document.createElement("option");
       optEmpty.value = "";
-      optEmpty.textContent = "ไม่ระบุ";
+      optEmpty.textContent = tt("form.optNone");
       collInput.appendChild(optEmpty);
       managedCollectionsRef.current.forEach((c) => {
         const o = document.createElement("option");
@@ -1067,12 +1081,12 @@ function App() {
       const btnCancel = document.createElement("button");
       btnCancel.type = "button";
       btnCancel.className = "map-popup-btn map-popup-btn-cancel";
-      btnCancel.textContent = "Cancel";
+      btnCancel.textContent = tt("form.cancel");
 
       const btnAdd = document.createElement("button");
       btnAdd.type = "button";
       btnAdd.className = "map-popup-btn map-popup-btn-primary";
-      btnAdd.textContent = "Add";
+      btnAdd.textContent = tt("form.add");
 
       actions.appendChild(btnCancel);
       actions.appendChild(btnAdd);
@@ -1346,10 +1360,10 @@ function App() {
       map.fitBounds(b, { padding: 80, maxZoom: 15 });
     }
 
-    const name = target.properties?.name || "Place";
+    const name = target.properties?.name || t("map.defaultName");
     const coll = target.properties?.collection
       ? String(target.properties.collection)
-      : "Uncategorized";
+      : t("map.uncategorized");
     const center = b.getCenter();
     const popup = new maplibregl.Popup({ offset: 14, closeButton: true })
       .setLngLat(center)
@@ -1358,7 +1372,7 @@ function App() {
       )
       .addTo(map);
     selectionPopupRef.current = popup;
-  }, [mapPlaces, places, selectedPlaceId, viewMode, mapStyleReady]);
+  }, [mapPlaces, places, selectedPlaceId, viewMode, mapStyleReady, lang, t]);
 
   return (
     <main className="page">
@@ -1370,22 +1384,38 @@ function App() {
         ))}
       </div>
       <header className="header">
-        <h1>Mini Spatial Data</h1>
-        {/* <p>Places list from backend API</p> */}
+        <h1>{t("header.title")}</h1>
+        <div className="lang-switch" role="group" aria-label={t("lang.label")}>
+          <button
+            type="button"
+            className={lang === "th" ? "active" : ""}
+            onClick={() => setLang("th")}
+          >
+            {t("lang.th")}
+          </button>
+          <button
+            type="button"
+            className={lang === "en" ? "active" : ""}
+            onClick={() => setLang("en")}
+          >
+            {t("lang.en")}
+          </button>
+        </div>
       </header>
 
       <section className="panel">
         {deleteTarget && (
           <div className="modal-backdrop" role="dialog" aria-modal="true">
             <div className="modal-card">
-              <h3>Delete place?</h3>
+              <h3>{t("modal.deletePlace")}</h3>
               <p>
-                Are you sure you want to delete{" "}
-                <strong>{deleteTarget.name || "this place"}</strong>?
+                {t("modal.deletePlaceLead")}{" "}
+                <strong>{deleteTarget.name || t("modal.thisPlace")}</strong>
+                {t("modal.deletePlaceTrail")}
               </p>
               <div className="modal-actions">
                 <button type="button" onClick={cancelDelete} disabled={submitting}>
-                  Cancel
+                  {t("modal.cancel")}
                 </button>
                 <button
                   type="button"
@@ -1393,7 +1423,7 @@ function App() {
                   onClick={confirmDelete}
                   disabled={submitting}
                 >
-                  Delete
+                  {t("modal.delete")}
                 </button>
               </div>
             </div>
@@ -1403,17 +1433,15 @@ function App() {
         {collDeleteTarget && (
           <div className="modal-backdrop" role="dialog" aria-modal="true">
             <div className="modal-card">
-              <h3>Delete collection?</h3>
-              <p>
-                Remove <strong>{collDeleteTarget.name}</strong>? Places using it will become uncategorized.
-              </p>
+              <h3>{t("modal.deleteColl")}</h3>
+              <p>{t("modal.deleteCollBody", { name: collDeleteTarget.name })}</p>
               <div className="modal-actions">
                 <button
                   type="button"
                   onClick={() => setCollDeleteTarget(null)}
                   disabled={submitting}
                 >
-                  Cancel
+                  {t("modal.cancel")}
                 </button>
                 <button
                   type="button"
@@ -1421,7 +1449,7 @@ function App() {
                   onClick={confirmCollectionDelete}
                   disabled={submitting}
                 >
-                  Delete
+                  {t("modal.delete")}
                 </button>
               </div>
             </div>
@@ -1434,44 +1462,49 @@ function App() {
             className={viewMode === "table" ? "active" : ""}
             onClick={() => changeViewMode("table")}
           >
-            Table
+            {t("view.table")}
           </button>
           <button
             type="button"
             className={viewMode === "map" ? "active" : ""}
             onClick={() => changeViewMode("map")}
           >
-            Map
+            {t("view.map")}
           </button>
           <button
             type="button"
             className={viewMode === "collections" ? "active" : ""}
             onClick={() => changeViewMode("collections")}
           >
-            Collections
+            {t("view.collections")}
           </button>
         </div>
 
-        {loading && <p>Loading...</p>}
-        {error && <p className="error">Error: {error}</p>}
+        {loading && <p>{t("loading")}</p>}
+        {error && (
+          <p className="error">
+            {t("error.prefix")}
+            {error}
+          </p>
+        )}
         {viewMode === "table" && (
           <>
             <div className="panel-title">
-              <h2>Places</h2>
+              <h2>{t("places.title")}</h2>
               <button
                 type="button"
                 className="btn-primary"
                 onClick={openAddForm}
                 disabled={loading || submitting || !!editingId}
               >
-                Add place
+                {t("places.addPlace")}
               </button>
             </div>
             <div className="filter-row">
               <input
                 type="search"
                 className="filter-input"
-                placeholder="Search name or collection (contains)"
+                placeholder={t("places.searchPlaceholder")}
                 value={filterInput}
                 onChange={(e) => setFilterInput(e.target.value)}
                 onKeyDown={(e) => {
@@ -1480,22 +1513,22 @@ function App() {
                 disabled={loading || submitting}
               />
               <button type="button" onClick={applyNameFilter} disabled={loading || submitting}>
-                Search
+                {t("places.search")}
               </button>
               <button type="button" onClick={clearNameFilter} disabled={loading || submitting}>
-                Clear
+                {t("places.clear")}
               </button>
             </div>
             <div className="data-tools">
               <div className="export-tools">
                 <button type="button" onClick={() => handleExport("csv")} disabled={loading || submitting || importing}>
-                  Export CSV
+                  {t("places.exportCsv")}
                 </button>
                 <button type="button" onClick={() => handleExport("xlsx")} disabled={loading || submitting || importing}>
-                  Export XLSX
+                  {t("places.exportXlsx")}
                 </button>
                 <button type="button" onClick={deleteSelected} disabled={loading || submitting || importing || selectedIds.length === 0}>
-                  Delete Selected ({selectedIds.length})
+                  {t("places.deleteSelected", { n: selectedIds.length })}
                 </button>
               </div>
               <div className="import-tools">
@@ -1506,7 +1539,7 @@ function App() {
                   disabled={loading || submitting || importing}
                 />
                 <button type="button" onClick={handleImport} disabled={loading || submitting || importing}>
-                  {importing ? "Importing..." : "Import File"}
+                  {importing ? t("places.importing") : t("places.importFile")}
                 </button>
               </div>
             </div>
@@ -1514,19 +1547,21 @@ function App() {
               <form className="place-form place-form-extended" onSubmit={submitPlace}>
                 <input
                   type="text"
-                  placeholder="Place name"
+                  placeholder={t("form.placeName")}
                   value={form.name}
                   onChange={(e) => setForm((prev) => ({ ...prev, name: e.target.value }))}
                 />
                 <select
                   value={form.collection}
                   onChange={(e) => setForm((prev) => ({ ...prev, collection: e.target.value }))}
-                  aria-label="Collection"
+                  aria-label={t("form.collectionAria")}
                 >
-                  <option value="">— ไม่ระบุ —</option>
+                  <option value="">{t("form.optNone")}</option>
                   {form.collection &&
                     !managedCollections.some((c) => c.name === form.collection) && (
-                      <option value={form.collection}>{form.collection} (unlisted)</option>
+                      <option value={form.collection}>
+                        {form.collection} {t("form.unlisted")}
+                      </option>
                     )}
                   {managedCollections.map((c) => (
                     <option key={c.id} value={c.name}>
@@ -1537,25 +1572,25 @@ function App() {
                 <select
                   value={form.geometryType}
                   onChange={(e) => setForm((prev) => ({ ...prev, geometryType: e.target.value }))}
-                  aria-label="Geometry type"
+                  aria-label={t("form.geometryAria")}
                 >
-                  <option value="Point">Point</option>
-                  <option value="LineString">LineString</option>
-                  <option value="Polygon">Polygon</option>
+                  <option value="Point">{t("form.geom.point")}</option>
+                  <option value="LineString">{t("form.geom.line")}</option>
+                  <option value="Polygon">{t("form.geom.poly")}</option>
                 </select>
                 {form.geometryType === "Point" ? (
                   <>
                     <input
                       type="number"
                       step="any"
-                      placeholder="Longitude"
+                      placeholder={t("form.lng")}
                       value={form.lng}
                       onChange={(e) => setForm((prev) => ({ ...prev, lng: e.target.value }))}
                     />
                     <input
                       type="number"
                       step="any"
-                      placeholder="Latitude"
+                      placeholder={t("form.lat")}
                       value={form.lat}
                       onChange={(e) => setForm((prev) => ({ ...prev, lat: e.target.value }))}
                     />
@@ -1566,25 +1601,22 @@ function App() {
                     rows={4}
                     placeholder={
                       form.geometryType === "LineString"
-                        ? '[[lng,lat],[lng,lat],...] e.g. [[100.5,13.7],[100.51,13.71]]'
-                        : '[[[lng,lat],...]] closed ring, e.g. [[[100.5,13.7],[100.52,13.7],[100.52,13.72],[100.5,13.72],[100.5,13.7]]]'
+                        ? t("form.coordsLinePh")
+                        : t("form.coordsPolyPh")
                     }
                     value={form.coordsJson}
                     onChange={(e) => setForm((prev) => ({ ...prev, coordsJson: e.target.value }))}
                   />
                 )}
                 <button type="submit" disabled={submitting}>
-                  Add
+                  {t("form.add")}
                 </button>
                 <button type="button" onClick={cancelEdit} disabled={submitting}>
-                  Cancel
+                  {t("form.cancel")}
                 </button>
               </form>
             )}
-            <p className="map-help">
-              Tip: Create collections and colors under the Collections tab. Point = click map to add.
-              LineString/Polygon = add form or inline table edit. Polygon rings must close.
-            </p>
+            <p className="map-help">{t("table.tip")}</p>
             <div className="table-wrap">
               <table>
                 <thead>
@@ -1596,17 +1628,17 @@ function App() {
                         onChange={(e) => toggleSelectCurrentPage(e.target.checked)}
                       />
                     </th>
-                    <th>Name</th>
-                    <th>Collection</th>
-                    <th>Geometry</th>
-                    <th>Coordinates</th>
-                    <th>Actions</th>
+                    <th>{t("table.thName")}</th>
+                    <th>{t("table.thCollection")}</th>
+                    <th>{t("table.thGeometry")}</th>
+                    <th>{t("table.thCoordinates")}</th>
+                    <th>{t("table.thActions")}</th>
                   </tr>
                 </thead>
                 <tbody>
                   {places.length === 0 && (
                     <tr>
-                      <td colSpan={6}>No places found</td>
+                      <td colSpan={6}>{t("table.empty")}</td>
                     </tr>
                   )}
                   {places.map((place) => {
@@ -1641,12 +1673,14 @@ function App() {
                               value={form.collection}
                               onChange={(e) => setForm((prev) => ({ ...prev, collection: e.target.value }))}
                               disabled={submitting}
-                              aria-label="Collection"
+                              aria-label={t("form.collectionAria")}
                             >
-                              <option value="">— ไม่ระบุ —</option>
+                              <option value="">{t("form.optNone")}</option>
                               {form.collection &&
                                 !managedCollections.some((c) => c.name === form.collection) && (
-                                  <option value={form.collection}>{form.collection} (unlisted)</option>
+                                  <option value={form.collection}>
+                                    {form.collection} {t("form.unlisted")}
+                                  </option>
                                 )}
                               {managedCollections.map((c) => (
                                 <option key={c.id} value={c.name}>
@@ -1665,11 +1699,11 @@ function App() {
                               value={form.geometryType}
                               onChange={(e) => setForm((prev) => ({ ...prev, geometryType: e.target.value }))}
                               disabled={submitting}
-                              aria-label="Geometry type"
+                              aria-label={t("form.geometryAria")}
                             >
-                              <option value="Point">Point</option>
-                              <option value="LineString">LineString</option>
-                              <option value="Polygon">Polygon</option>
+                              <option value="Point">{t("form.geom.point")}</option>
+                              <option value="LineString">{t("form.geom.line")}</option>
+                              <option value="Polygon">{t("form.geom.poly")}</option>
                             </select>
                           ) : (
                             place?.geometry?.type || "-"
@@ -1683,7 +1717,7 @@ function App() {
                                   type="number"
                                   step="any"
                                   className="table-inline-input table-inline-input-narrow"
-                                  placeholder="Lng"
+                                  placeholder={t("form.lngShort")}
                                   value={form.lng}
                                   onChange={(e) => setForm((prev) => ({ ...prev, lng: e.target.value }))}
                                   disabled={submitting}
@@ -1692,7 +1726,7 @@ function App() {
                                   type="number"
                                   step="any"
                                   className="table-inline-input table-inline-input-narrow"
-                                  placeholder="Lat"
+                                  placeholder={t("form.latShort")}
                                   value={form.lat}
                                   onChange={(e) => setForm((prev) => ({ ...prev, lat: e.target.value }))}
                                   disabled={submitting}
@@ -1715,10 +1749,10 @@ function App() {
                           {isRowEdit ? (
                             <>
                               <button type="button" onClick={() => submitPlace()} disabled={submitting}>
-                                Save
+                                {t("form.save")}
                               </button>
                               <button type="button" onClick={cancelEdit} disabled={submitting}>
-                                Cancel
+                                {t("form.cancel")}
                               </button>
                             </>
                           ) : (
@@ -1728,14 +1762,14 @@ function App() {
                                 onClick={() => showOnMap(place)}
                                 disabled={submitting || (!!editingId && editingId !== place.id)}
                               >
-                                Show on map
+                                {t("table.showOnMap")}
                               </button>
                               <button
                                 type="button"
                                 onClick={() => startEdit(place)}
                                 disabled={submitting || (!!editingId && editingId !== place.id) || showAddForm}
                               >
-                                Edit
+                                {t("table.edit")}
                               </button>
                               <button
                                 type="button"
@@ -1747,7 +1781,7 @@ function App() {
                                 }
                                 disabled={submitting || !!editingId}
                               >
-                                Delete
+                                {t("table.delete")}
                               </button>
                             </>
                           )}
@@ -1760,24 +1794,24 @@ function App() {
             </div>
             <div className="pagination">
               <span>
-                Showing {places.length} of {totalRecords} records
+                {t("pagination.showing", { shown: places.length, total: totalRecords })}
               </span>
               <button
                 type="button"
                 onClick={() => goToPage(currentPage - 1)}
                 disabled={currentPage <= 1 || loading || submitting}
               >
-                Previous
+                {t("pagination.prev")}
               </button>
               <span>
-                Page {totalPages === 0 ? 0 : currentPage} / {totalPages}
+                {t("pagination.page", { cur: totalPages === 0 ? 0 : currentPage, total: totalPages })}
               </span>
               <button
                 type="button"
                 onClick={() => goToPage(currentPage + 1)}
                 disabled={totalPages === 0 || currentPage >= totalPages || loading || submitting}
               >
-                Next
+                {t("pagination.next")}
               </button>
             </div>
           </>
@@ -1785,15 +1819,11 @@ function App() {
 
         {viewMode === "map" && (
           <>
-            <p className="map-view-hint">
-              The map shows all places matching your search (not just the current table page). Polygons
-              (filled) and lines use colors by collection. Points: click empty map to add. Toggle layers in
-              the legend.
-            </p>
+            <p className="map-view-hint">{t("map.hint")}</p>
             <div className="map-legend">
-              <span className="map-legend-title">Collections</span>
+              <span className="map-legend-title">{t("map.legend")}</span>
               {distinctCollectionKeys.map((key) => {
-                const label = key === "" ? "Uncategorized" : key;
+                const label = key === "" ? t("map.uncategorized") : key;
                 const visible = !hiddenMapCollections.includes(key);
                 const color =
                   key === "" ? "#94a3b8" : mapCollectionColorByName[key] || "#cbd5e1";
@@ -1803,7 +1833,7 @@ function App() {
                     type="button"
                     className={`map-legend-chip ${visible ? "" : "map-legend-chip-off"}`}
                     onClick={() => toggleMapCollectionVisibility(key)}
-                    title={visible ? "Click to hide on map" : "Click to show on map"}
+                    title={visible ? t("map.legendHide") : t("map.legendShow")}
                   >
                     <span className="map-legend-swatch" style={{ background: color }} aria-hidden />
                     {label}
@@ -1819,24 +1849,21 @@ function App() {
           <>
             <div className="panel-title collections-panel-head">
               <div>
-                <h2>Collections</h2>
-                <p className="collections-intro">
-                  Add, edit, or delete categories and pick map colors. Places link by exact name match. After
-                  import, use Sync from places to register collection names that appear only on places.
-                </p>
+                <h2>{t("collections.title")}</h2>
+                <p className="collections-intro">{t("collections.intro")}</p>
               </div>
             </div>
             <div className="collections-add-bar">
               <input
                 type="text"
                 className="collections-add-name"
-                placeholder="New collection name"
+                placeholder={t("collections.namePh")}
                 value={newCollectionName}
                 onChange={(e) => setNewCollectionName(e.target.value)}
                 disabled={submitting}
               />
               <label className="collections-color-picker-wrap">
-                <span className="sr-only">Color</span>
+                <span className="sr-only">{t("collections.ariaColor")}</span>
                 <input
                   type="color"
                   value={normalizeHexColor(newCollectionColor) || "#2563eb"}
@@ -1847,7 +1874,7 @@ function App() {
               <input
                 type="text"
                 className="collections-hex-input"
-                placeholder="#2563eb"
+                placeholder={t("collections.hexPh")}
                 value={newCollectionColor}
                 onChange={(e) => setNewCollectionColor(e.target.value)}
                 disabled={submitting}
@@ -1859,33 +1886,32 @@ function App() {
                 onClick={handleAddManagedCollection}
                 disabled={submitting}
               >
-                Add collection
+                {t("collections.add")}
               </button>
               <button
                 type="button"
                 className="collections-sync-btn"
                 onClick={syncCollectionsFromPlaces}
                 disabled={submitting}
-                title="Create registry rows for every distinct properties.collection on places"
+                title={t("collections.syncTitle")}
               >
-                Sync from places
+                {t("collections.sync")}
               </button>
             </div>
             <div className="table-wrap">
               <table className="collections-registry-table">
                 <thead>
                   <tr>
-                    <th>Name</th>
-                    <th>Map color</th>
-                    <th>Actions</th>
+                    <th>{t("collections.thName")}</th>
+                    <th>{t("collections.thColor")}</th>
+                    <th>{t("collections.thActions")}</th>
                   </tr>
                 </thead>
                 <tbody>
                   {registryDraft.length === 0 && (
                     <tr>
                       <td colSpan={3} className="collections-empty">
-                        No collections yet — add one above, or Sync from places if imports already set
-                        collection names.
+                        {t("collections.empty")}
                       </td>
                     </tr>
                   )}
@@ -1907,7 +1933,7 @@ function App() {
                             value={normalizeHexColor(row.color) || "#64748b"}
                             onChange={(e) => updateCollectionDraft(row.id, { color: e.target.value })}
                             disabled={submitting}
-                            aria-label="Pick color"
+                            aria-label={t("collections.ariaRowColor")}
                           />
                           <input
                             type="text"
@@ -1925,7 +1951,7 @@ function App() {
                           onClick={() => saveCollectionRow(row)}
                           disabled={submitting}
                         >
-                          Save
+                          {t("form.save")}
                         </button>
                         <button
                           type="button"
@@ -1934,7 +1960,7 @@ function App() {
                           }
                           disabled={submitting}
                         >
-                          Delete
+                          {t("table.delete")}
                         </button>
                       </td>
                     </tr>

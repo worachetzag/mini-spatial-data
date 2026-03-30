@@ -2,10 +2,13 @@ import React from "react";
 import { createRoot } from "react-dom/client";
 import "maplibre-gl/dist/maplibre-gl.css";
 import App from "./App";
+import { I18nProvider } from "./i18n/I18nContext.jsx";
 import "./index.css";
 
 createRoot(document.getElementById("root")).render(
   <React.StrictMode>
-    <App />
+    <I18nProvider>
+      <App />
+    </I18nProvider>
   </React.StrictMode>
 );
